@@ -50,10 +50,14 @@ export function AdminLoginPage() {
       const from = location.state?.from?.pathname || '/admin/dashboard';
       navigate(from, { replace: true });
     } catch (err) {
-      setServerError(
+      const message =
         err.response?.data?.message ||
-          'Invalid administrative credentials. Please verify your email and password.'
-      );
+        (err.response?.status === 404
+          ? 'API endpoint not found. Please verify the backend server is running the latest build.'
+          : err.message === 'Network Error' || !err.response
+          ? 'Cannot connect to backend server. Please verify the backend is running on port 5000.'
+          : 'Invalid administrative credentials. Please verify your email and password.');
+      setServerError(message);
     } finally {
       setIsSubmitting(false);
     }
