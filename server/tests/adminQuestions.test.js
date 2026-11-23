@@ -298,4 +298,115 @@ describe('Phase 4 - Question Management CRUD & Active Limit Enforcement', () => 
     expect(deleteRes.status).toBe(400);
     expect(deleteRes.body.message).toMatch(/referenced in.*attempts/i);
   });
+
+  // --- INVARIANT & CONCURRENCY AUDIT TESTS ---
+
+  it('should prevent simultaneous replacement requests from corrupting active question slots', async () => {
+    const r1 = await Question.create({
+      questionText: 'Replacement candidate 1 with sufficient text length',
+      options: validQuestionData.options,
+      correctOption: 'B',
+      category: 'Quantitative',
+      difficulty: 'Easy',
+      isActive: false,
+    });
+    const r2 = await Question.create({
+      questionText: 'Replacement candidate 2 with sufficient text length',
+      options: validQuestionData.options,
+      correctOption: 'C',
+      category: 'Logical Reasoning',
+      difficulty: 'Medium',
+      isActive: false,
+    });
+
+    const activeQuestions = await Question.find({ isActive: true });
+    const targetQ = activeQuestions[0];
+
+    const req1 = request(app)
+      .patch(`/api/admin/questions/${targetQ._id}/status`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ isActive: false, replacementQuestionId: r1._id });
+
+    const req2 = request(app)
+      .patch(`/api/admin/questions/${targetQ._id}/status`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ isActive: false, replacementQuestionId: r2._id });
+
+    const [res1, res2] = await Promise.all([req1, req2]);
+
+    const statuses = [res1.status, res2.status];
+    expect(statuses).toContain(200);
+    expect(statuses).toContain(409);
+
+    const activeCount = await Question.countDocuments({ isActive: true });
+    expect(activeCount).toBe(10);
+
+    const currentActive = await Question.find({ isActive: true });
+    const slots = currentActive.map((q) => q.activeSlot).sort((a, b) => a - b);
+    expect(slots).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  });
+
+  it('should leave original active question intact if replacement operation fails', async () => {
+    const activeQuestions = await Question.find({ isActive: true });
+    const targetQ = activeQuestions[0];
+    const originalSlot = targetQ.activeSlot;
+
+    const invalidReplacement = await Question.create({
+      questionText: 'Valid initially but will fail on save',
+      options: validQuestionData.options,
+      correctOption: 'B',
+      category: 'Quantitative',
+      difficulty: 'Easy',
+      isActive: false,
+    });
+
+    const saveSpy = vi.spyOn(Question.prototype, 'save').mockImplementation(function () {
+      if (this._id && this._id.toString() === invalidReplacement._id.toString()) {
+        throw new Error('Simulated database write failure on replacement');
+      }
+      return Question.prototype.save.call(this);
+    });
+
+    const swapRes = await request(app)
+      .patch(`/api/admin/questions/${targetQ._id}/status`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ isActive: false, replacementQuestionId: invalidReplacement._id });
+
+    saveSpy.mockRestore();
+
+    expect(swapRes.status).toBe(500);
+
+    const reloadedOriginal = await Question.findById(targetQ._id);
+    expect(reloadedOriginal.isActive).toBe(true);
+    expect(reloadedOriginal.activeSlot).toBe(originalSlot);
+
+    const activeCount = await Question.countDocuments({ isActive: true });
+    expect(activeCount).toBe(10);
+  });
+
+  it('should enforce that all active slots are strictly within 1 through 10', async () => {
+    await expect(
+      Question.create({
+        questionText: 'Attempting invalid active slot 11',
+        options: validQuestionData.options,
+        correctOption: 'B',
+        category: 'Quantitative',
+        difficulty: 'Easy',
+        isActive: true,
+        activeSlot: 11,
+      })
+    ).rejects.toThrow();
+
+    await expect(
+      Question.create({
+        questionText: 'Attempting invalid active slot 0',
+        options: validQuestionData.options,
+        correctOption: 'B',
+        category: 'Quantitative',
+        difficulty: 'Easy',
+        isActive: true,
+        activeSlot: 0,
+      })
+    ).rejects.toThrow();
+  });
 });

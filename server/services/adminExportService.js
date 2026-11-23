@@ -172,8 +172,15 @@ export async function generateCandidatesCsv(query = {}) {
 }
 
 /**
- * Generates a clean Excel XML (SpreadsheetML) document with strict typing
+ * Generates an Excel-compatible SpreadsheetML (.xls) XML workbook with strict typing
  * and formula injection protection.
+ *
+ * NOTE ON EXCEL FORMAT:
+ * This implementation generates Microsoft Office SpreadsheetML XML format (.xls)
+ * rather than binary zipped OpenXML (.xlsx). SpreadsheetML is natively opened by Microsoft
+ * Excel, LibreOffice Calc, and Google Sheets without external dependencies. It enforces
+ * strict cell data types (<Data ss:Type="String"> for sanitized text, <Data ss:Type="Number">
+ * for numerical scores) to prevent formula execution warnings while preserving true numbers.
  */
 export async function generateCandidatesExcel(query = {}) {
   const candidates = await fetchCandidatesForExport(query);

@@ -159,18 +159,37 @@ export async function updateQuestionStatus(id, isActive, replacementQuestionId =
         throw ApiError.badRequest('Replacement question is already active');
       }
 
-      // Deactivate current question
       const currentSlot = question.activeSlot;
-      question.isActive = false;
-      question.activeSlot = null;
-      await question.save();
+      if (!currentSlot) {
+        throw ApiError.badRequest('Target question does not hold a valid active slot');
+      }
 
-      // Activate replacement question in that slot
-      replacement.isActive = true;
-      replacement.activeSlot = currentSlot;
-      await replacement.save();
+      // Atomically mark current question inactive
+      const deactivated = await Question.findOneAndUpdate(
+        { _id: question._id, isActive: true, activeSlot: currentSlot },
+        { $set: { isActive: false, activeSlot: null } },
+        { new: true }
+      );
 
-      return question;
+      if (!deactivated) {
+        throw ApiError.conflict('Question was concurrently deactivated or modified by another operation.');
+      }
+
+      // Activate replacement question in the vacated slot with compensation rollback
+      try {
+        replacement.isActive = true;
+        replacement.activeSlot = currentSlot;
+        await replacement.save();
+      } catch (err) {
+        // Rollback original question to active state if replacement activation fails
+        await Question.findByIdAndUpdate(question._id, {
+          isActive: true,
+          activeSlot: currentSlot,
+        });
+        throw err;
+      }
+
+      return deactivated;
     }
 
     question.isActive = false;
