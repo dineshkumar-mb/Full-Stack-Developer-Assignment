@@ -69,8 +69,29 @@ const candidateSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
+
+// Backward-compatible field mapping
+candidateSchema.pre('validate', function (next) {
+  if (!this.phoneNumber && this.get('phone')) {
+    this.phoneNumber = this.get('phone');
+  }
+  if (!this.highestQualification && this.get('qualification')) {
+    this.highestQualification = this.get('qualification');
+  }
+  next();
+});
+
+candidateSchema.virtual('phone').get(function () {
+  return this.phoneNumber;
+});
+
+candidateSchema.virtual('qualification').get(function () {
+  return this.highestQualification;
+});
 
 candidateSchema.index({ fullName: 1 });
 

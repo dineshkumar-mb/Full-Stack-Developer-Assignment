@@ -1,6 +1,7 @@
 import app from './app.js';
 import env from './config/environment.js';
 import { connectDB, disconnectDB } from './config/database.js';
+import { startExpiryScanner, stopExpiryScanner } from './services/expiryService.js';
 
 let server;
 
@@ -8,6 +9,9 @@ const startServer = async () => {
   try {
     // Connect to database before starting server
     await connectDB();
+
+    // Start background assessment expiry worker
+    startExpiryScanner(15000);
 
     server = app.listen(env.PORT, () => {
       console.log(`[Server] Aptitude Assessment API running on port ${env.PORT} in ${env.NODE_ENV} mode`);
@@ -17,6 +21,7 @@ const startServer = async () => {
     // Graceful shutdown handlers
     const handleShutdown = async (signal) => {
       console.log(`\n[Server] Received ${signal}. Shutting down gracefully...`);
+      stopExpiryScanner();
       if (server) {
         server.close(async () => {
           console.log('[Server] HTTP server closed');

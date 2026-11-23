@@ -1,4 +1,6 @@
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
+import { Candidate } from '../models/Candidate.js';
 import env from '../config/environment.js';
 import ApiError from '../utils/ApiError.js';
 
@@ -34,13 +36,24 @@ export const requireAdmin = (req, res, next) => {
   next();
 };
 
-export const requireCandidate = (req, res, next) => {
+export const requireCandidate = async (req, res, next) => {
   if (!req.user) {
     return next(ApiError.unauthorized('Authentication required'));
   }
 
   if (req.user.role !== 'candidate') {
     return next(ApiError.forbidden('Access denied. Candidate session required.'));
+  }
+
+  if (mongoose.isValidObjectId(req.user.id)) {
+    try {
+      const candidate = await Candidate.findById(req.user.id);
+      if (candidate) {
+        req.candidate = candidate;
+      }
+    } catch (err) {
+      // Continue or pass to error handler
+    }
   }
 
   next();

@@ -5,6 +5,8 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import env from './config/environment.js';
 import healthRoutes from './routes/healthRoutes.js';
+import candidateRoutes from './routes/candidateRoutes.js';
+import assessmentRoutes from './routes/assessmentRoutes.js';
 import notFoundMiddleware from './middleware/notFoundMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
 
@@ -53,6 +55,9 @@ if (!env.isTest) {
 
 // Routes
 app.use('/api', healthRoutes);
+app.use('/api/candidates', candidateRoutes);
+app.use('/api/candidate', candidateRoutes);
+app.use('/api/assessment', assessmentRoutes);
 
 // Catch 404 routes
 app.use(notFoundMiddleware);

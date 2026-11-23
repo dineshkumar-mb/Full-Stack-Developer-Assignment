@@ -2,6 +2,10 @@ import mongoose from 'mongoose';
 
 const questionSnapshotSchema = new mongoose.Schema(
   {
+    snapshotId: {
+      type: String,
+      default: () => new mongoose.Types.ObjectId().toString(),
+    },
     questionId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Question',
@@ -55,7 +59,7 @@ const questionSnapshotSchema = new mongoose.Schema(
       default: null,
     },
   },
-  { _id: false }
+  { _id: true }
 );
 
 const scoreSummarySchema = new mongoose.Schema(
@@ -137,6 +141,10 @@ const attemptSchema = new mongoose.Schema(
     settingsSnapshot: {
       type: Object,
       required: true,
+    },
+    version: {
+      type: Number,
+      default: 0,
     },
   },
   {
