@@ -129,10 +129,10 @@ export function ResultPage() {
         <div className="mt-6 flex flex-wrap items-center justify-center gap-6">
           <div className="text-center px-4">
             <span className="text-xs uppercase tracking-wider font-semibold text-slate-500">
-              Net Score
+              Score (out of 10)
             </span>
-            <p className="text-4xl font-extrabold text-slate-900 mt-0.5">
-              {netScore} <span className="text-lg font-normal text-slate-500">/ 20</span>
+            <p className="text-4xl font-extrabold text-indigo-600 mt-0.5">
+              {scaledScoreOutOf10} <span className="text-lg font-normal text-slate-500">/ 10</span>
             </p>
           </div>
 
@@ -156,10 +156,10 @@ export function ResultPage() {
 
           <div className="text-center px-4">
             <span className="text-xs uppercase tracking-wider font-semibold text-slate-500">
-              Scaled Score
+              Raw Net Marks
             </span>
-            <p className="text-4xl font-extrabold text-indigo-600 mt-0.5">
-              {scaledScoreOutOf10} <span className="text-lg font-normal text-slate-500">/ 10</span>
+            <p className="text-4xl font-extrabold text-slate-900 mt-0.5">
+              {netScore} <span className="text-lg font-normal text-slate-500">/ 20</span>
             </p>
           </div>
         </div>
