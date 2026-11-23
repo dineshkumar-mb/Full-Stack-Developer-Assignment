@@ -4,7 +4,13 @@
 [![Frontend Tests](https://img.shields.io/badge/Frontend%20Tests-25%2F25%20Passed-brightgreen.svg)]()
 [![Production Build](https://img.shields.io/badge/Production%20Build-Passing-brightgreen.svg)]()
 [![MERN Stack](https://img.shields.io/badge/Stack-React%2018%20%7C%20Node.js%20%7C%20Express%20%7C%20MongoDB-blue.svg)]()
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel%20Production-success.svg)](https://full-stack-developer-assignment-01.vercel.app)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)]()
+
+> **🚀 Live Demo URL:** [https://full-stack-developer-assignment-01.vercel.app](https://full-stack-developer-assignment-01.vercel.app)  
+> **🔐 Admin Login Portal:** [https://full-stack-developer-assignment-01.vercel.app/admin/login](https://full-stack-developer-assignment-01.vercel.app/admin/login)  
+> **🔑 Demo Credentials:** Email: `admin@assessment.com` | Password: `AdminPassword123!` (or use the one-click **"Auto-fill Credentials"** button on the page)  
+> **🗄️ Database Cluster:** MongoDB Atlas Cloud Database (Active & Seeded)
 
 A full-stack, enterprise-grade Aptitude Assessment Dashboard built with the MERN stack (MongoDB, Express, React, Node.js). Engineered to fulfill the requirements of the **Full Stack Developer and AI Specialist** coding assignment, this system features a timed candidate assessment environment with negative marking, server-authoritative timer enforcement, automatic timeout finalization, state recovery across browser restarts, and an administrative suite with real-time analytics, question bank management with an atomic 10-active-question invariant, candidate transcripts, and CSV/Excel exports with CWE-1236 spreadsheet injection protection.
 
@@ -655,6 +661,14 @@ This concludes our comprehensive walkthrough."
 ---
 
 ## 22. Production Deployment Guide
+
+### Live Production Deployment Status
+The application is fully deployed and operational in production on Vercel:
+- **Live Application URL:** [https://full-stack-developer-assignment-01.vercel.app](https://full-stack-developer-assignment-01.vercel.app)
+- **Candidate Assessment Portal:** [https://full-stack-developer-assignment-01.vercel.app/](https://full-stack-developer-assignment-01.vercel.app/)
+- **Admin Management Portal:** [https://full-stack-developer-assignment-01.vercel.app/admin/login](https://full-stack-developer-assignment-01.vercel.app/admin/login)
+- **Live API Health Check:** [https://full-stack-developer-assignment-01.vercel.app/api/health](https://full-stack-developer-assignment-01.vercel.app/api/health)
+- **Cloud Database:** MongoDB Atlas cluster (`cluster0.h4pbuky.mongodb.net`) — connected and seeded.
 
 ### Deployment Options Overview
 The application is architected to support two production deployment workflows:
