@@ -20,8 +20,13 @@ app.use(helmet());
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, curl, server-to-server) or matching CLIENT_URL
-      if (!origin || origin === env.CLIENT_URL || origin.startsWith('http://localhost:')) {
+      // Allow requests with no origin (e.g. mobile apps, curl, server-to-server), matching CLIENT_URL, localhost, or any Vercel preview/production deployment
+      if (
+        !origin ||
+        origin === env.CLIENT_URL ||
+        origin.startsWith('http://localhost:') ||
+        origin.endsWith('.vercel.app')
+      ) {
         callback(null, true);
       } else {
         callback(new Error(`CORS blocked for origin: ${origin}`));

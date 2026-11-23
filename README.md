@@ -656,40 +656,78 @@ This concludes our comprehensive walkthrough."
 
 ## 22. Production Deployment Guide
 
-### Deployment Topology
-- **Frontend:** Deployed to Vercel, Netlify, or AWS S3 + CloudFront.
-- **Backend:** Deployed to Render, Railway, AWS ECS, or DigitalOcean App Platform.
-- **Database:** MongoDB Atlas (M0 Free Tier or M10+ Production Cluster).
+### Deployment Options Overview
+The application is architected to support two production deployment workflows:
+1. **Unified Full-Stack Deployment on Vercel (Recommended):** Both the React frontend (Vite) and Node.js Express backend (Serverless Functions via `api/index.js` and `vercel.json`) run on the same Vercel deployment.
+2. **Decoupled Deployment:** Frontend on Vercel / Netlify with Backend on Render / Railway.
 
-### Step-by-Step Deployment Instructions
+---
 
-#### 1. Database (MongoDB Atlas)
+### Option A: Unified Full-Stack Deployment on Vercel (Frontend + Backend)
+
+This repository includes native Vercel Serverless Function bridging (`api/index.js`) and root routing configuration (`vercel.json`), allowing the entire MERN application to run on a single Vercel project with zero CORS configuration.
+
+#### Step 1: Set Up MongoDB Atlas Database
 1. Create a free M0 cluster on [MongoDB Atlas](https://www.mongodb.com/atlas).
-2. Create a database user with read/write privileges.
-3. Whitelist IP `0.0.0.0/0` (allow access from anywhere) in Network Access.
-4. Copy the connection URI: `mongodb+srv://<username>:<password>@cluster0.mongodb.net/aptitude_assessment?retryWrites=true&w=majority`.
+2. Create a database user with read/write privileges (e.g. `assessment_admin`).
+3. In **Network Access**, add IP `0.0.0.0/0` (Allow access from anywhere).
+4. Copy your connection string:
+   ```text
+   mongodb+srv://<username>:<password>@cluster0.mongodb.net/aptitude_assessment?retryWrites=true&w=majority
+   ```
 
-#### 2. Backend Deployment (Render / Railway)
-1. Link your GitHub repository to Render/Railway as a Web Service.
-2. Set Root Directory to `server`.
-3. Set Build Command to `npm install`.
-4. Set Start Command to `npm start`.
-5. Add Environment Variables:
+#### Step 2: Seed the Production Database
+Before first use, seed your MongoDB Atlas cluster with the administrator account, settings, and 10 corporate questions:
+```bash
+# In your local terminal, temporarily point MONGODB_URI to your Atlas cluster:
+$env:MONGODB_URI="mongodb+srv://<username>:<password>@cluster0.mongodb.net/aptitude_assessment?retryWrites=true&w=majority"
+npm run seed
+```
+
+#### Step 3: Deploy to Vercel via GitHub (Recommended)
+1. Push your latest code to GitHub (already configured at `https://github.com/dineshkumar-mb/Full-Stack-Developer-Assignment.git`).
+2. Log in to [Vercel Dashboard](https://vercel.com).
+3. Click **"Add New..."** > **"Project"** and import `Full-Stack-Developer-Assignment`.
+4. Leave Root Directory as `./` (the root `vercel.json` automatically orchestrates frontend build and serverless API).
+5. In **Environment Variables**, add:
+   - `MONGODB_URI`: `mongodb+srv://<username>:<password>@cluster0.mongodb.net/aptitude_assessment?retryWrites=true&w=majority`
+   - `JWT_SECRET`: `your_secure_random_jwt_secret_key_at_least_32_characters`
+   - `NODE_ENV`: `production`
+6. Click **Deploy**.
+7. Vercel will build the frontend (`client/dist`), compile the serverless API (`/api/*`), and assign your production URL (e.g., `https://full-stack-aptitude-assessment.vercel.app`).
+
+#### Step 4: Alternative: Deploy via Vercel CLI
+If deploying via command line:
+```bash
+# 1. Install or run Vercel CLI
+npx vercel login
+
+# 2. Deploy to production
+npx vercel --prod
+```
+
+---
+
+### Option B: Decoupled Deployment (Render Backend + Vercel Frontend)
+
+#### 1. Backend on Render
+1. Create a **New Web Service** on Render and connect the repository.
+2. Root Directory: `server`.
+3. Build Command: `npm install`.
+4. Start Command: `npm start`.
+5. Environment Variables:
    - `NODE_ENV=production`
    - `PORT=5000`
    - `MONGODB_URI=<your-atlas-connection-string>`
-   - `JWT_SECRET=<secure-random-32-char-string>`
-   - `JWT_EXPIRES_IN=1d`
-   - `CLIENT_URL=https://<your-frontend-domain>.vercel.app`
-6. Run the seeder once via Render shell or locally pointing `MONGODB_URI` to Atlas: `npm run seed`.
+   - `JWT_SECRET=<your-jwt-secret>`
+   - `CLIENT_URL=https://<your-vercel-domain>.vercel.app`
 
-#### 3. Frontend Deployment (Vercel)
-1. Link your GitHub repository to Vercel.
-2. Set Root Directory to `client`.
-3. Framework Preset: `Vite`.
-4. Add Environment Variable:
-   - `VITE_API_BASE_URL=https://<your-backend-domain>.onrender.com/api`
-5. Click **Deploy**.
+#### 2. Frontend on Vercel
+1. In Vercel, set Root Directory to `client`.
+2. Framework Preset: `Vite`.
+3. Environment Variables:
+   - `VITE_API_BASE_URL=https://<your-render-backend>.onrender.com/api`
+4. Click **Deploy**.
 
 ---
 
