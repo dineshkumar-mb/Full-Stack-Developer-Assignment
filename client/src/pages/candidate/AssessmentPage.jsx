@@ -35,6 +35,34 @@ export function AssessmentPage() {
   const [autoSubmittedNotice, setAutoSubmittedNotice] = useState(false);
 
   const expiresAtRef = useRef(null);
+  const clockSkewRef = useRef(0); // client-to-server clock drift in ms
+  const requestSequenceRef = useRef({}); // per-snapshot monotonic sequence tracker
+  const isSubmittingRef = useRef(false);
+
+  // Submit assessment handler (memoized for timer auto-submit)
+  const handleSubmit = useCallback(async () => {
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+
+    try {
+      await assessmentService.submitAssessment();
+      setIsSubmitModalOpen(false);
+      navigate('/result', { replace: true });
+    } catch (err) {
+      // If already submitted/expired on server (400, 403, 409), attempt is finalized -> route to result
+      const status = err.response?.status || err.status;
+      if (status === 400 || status === 403 || status === 409) {
+        navigate('/result', { replace: true });
+      } else {
+        setSaveErrorMessage(
+          err.response?.data?.message || err.message || 'Submission failed. Please try again.'
+        );
+        isSubmittingRef.current = false;
+        setIsSubmitting(false);
+      }
+    }
+  }, [navigate]);
 
   // Initialize or resume attempt
   useEffect(() => {
@@ -45,9 +73,9 @@ export function AssessmentPage() {
         const response = await assessmentService.getCurrentAttempt();
         if (!isMounted) return;
 
-        const data = response.data.attempt;
+        const data = response.data?.attempt || response.attempt;
 
-        // If already completed, redirect to result
+        // If already completed or expired, redirect to result
         if (data.status === 'completed' || data.status === 'expired') {
           navigate('/result', { replace: true });
           return;
@@ -55,16 +83,22 @@ export function AssessmentPage() {
 
         setAttempt(data);
         setQuestions(data.questions || []);
-        expiresAtRef.current = new Date(data.expiresAt).getTime();
 
-        const initialRemaining = Math.max(
-          0,
-          Math.floor((expiresAtRef.current - Date.now()) / 1000)
-        );
+        // Server-authoritative clock synchronization:
+        // Calculate the difference between client wall-clock and server timestamp
+        const serverNowMs = data.serverNow ? new Date(data.serverNow).getTime() : Date.now();
+        const clientNowMs = Date.now();
+        clockSkewRef.current = clientNowMs - serverNowMs;
+
+        const expiresAtMs = new Date(data.expiresAt).getTime();
+        expiresAtRef.current = expiresAtMs;
+
+        const adjustedNowMs = Date.now() - clockSkewRef.current;
+        const initialRemaining = Math.max(0, Math.floor((expiresAtMs - adjustedNowMs) / 1000));
         setRemainingSeconds(initialRemaining);
       } catch (err) {
         if (!isMounted) return;
-        const msg = err.response?.data?.message || 'Failed to load assessment attempt.';
+        const msg = err.response?.data?.message || err.message || 'Failed to load assessment attempt.';
         setSaveErrorMessage(msg);
       } finally {
         if (isMounted) setIsLoading(false);
@@ -78,33 +112,13 @@ export function AssessmentPage() {
     };
   }, [navigate]);
 
-  // Submit assessment handler (memoized for timer auto-submit)
-  const handleSubmit = useCallback(async () => {
-    setIsSubmitting(true);
-    try {
-      await assessmentService.submitAssessment();
-      setIsSubmitModalOpen(false);
-      navigate('/result', { replace: true });
-    } catch (err) {
-      // If already submitted/expired on server, navigate to result
-      if (err.response?.status === 400 || err.response?.status === 409) {
-        navigate('/result', { replace: true });
-      } else {
-        setSaveErrorMessage(
-          err.response?.data?.message || 'Submission failed. Please try again.'
-        );
-        setIsSubmitting(false);
-      }
-    }
-  }, [navigate]);
-
-  // Server-authoritative timer countdown
+  // Server-authoritative timer countdown with clock drift compensation
   useEffect(() => {
     if (!expiresAtRef.current) return;
 
     const interval = setInterval(() => {
-      const now = Date.now();
-      const diffSec = Math.max(0, Math.floor((expiresAtRef.current - now) / 1000));
+      const adjustedNow = Date.now() - clockSkewRef.current;
+      const diffSec = Math.max(0, Math.floor((expiresAtRef.current - adjustedNow) / 1000));
       setRemainingSeconds(diffSec);
 
       if (diffSec <= 0) {
@@ -120,20 +134,28 @@ export function AssessmentPage() {
   // Window unload guard
   useEffect(() => {
     const handleBeforeUnload = (e) => {
-      e.preventDefault();
-      e.returnValue = 'Assessment is in progress. Are you sure you want to leave?';
+      if (!isSubmittingRef.current) {
+        e.preventDefault();
+        e.returnValue = 'Assessment is in progress. Are you sure you want to leave?';
+      }
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
-  // Save answer or review flag
+  // Save answer or review flag with sequence-based race condition protection
   const saveQuestionUpdate = async (snapshotId, updates) => {
+    if (Boolean(attempt) && remainingSeconds <= 0) return;
+
+    // Increment request sequence for this snapshot to prevent out-of-order race conditions
+    const currentSeq = (requestSequenceRef.current[snapshotId] || 0) + 1;
+    requestSequenceRef.current[snapshotId] = currentSeq;
+
     setSavingStatus('saving');
     setSaveErrorMessage(null);
 
-    // Optimistically update local state
+    // Optimistically update local state immediately
     setQuestions((prev) =>
       prev.map((q) =>
         q.snapshotId === snapshotId
@@ -151,31 +173,42 @@ export function AssessmentPage() {
 
     try {
       await assessmentService.saveAnswer(snapshotId, updates);
-      setSavingStatus('saved');
-      setTimeout(() => setSavingStatus('idle'), 2000);
+
+      // Only transition to "saved" if this request is still the latest one for this question
+      if (requestSequenceRef.current[snapshotId] === currentSeq) {
+        setSavingStatus('saved');
+        setTimeout(() => {
+          setSavingStatus((curr) => (curr === 'saved' ? 'idle' : curr));
+        }, 2000);
+      }
     } catch (err) {
-      setSavingStatus('error');
-      setSaveErrorMessage(
-        err.response?.data?.message || 'Failed to save your answer. Check connection.'
-      );
+      // If a newer request was dispatched while this request was in flight, do not report stale error
+      if (requestSequenceRef.current[snapshotId] === currentSeq) {
+        setSavingStatus('error');
+        setSaveErrorMessage(
+          err.response?.data?.message || err.message || 'Failed to save your answer. Check connection.'
+        );
+      }
     }
   };
 
+  const isTimeExpired = Boolean(attempt) && remainingSeconds <= 0;
+
   const handleSelectOption = (optionId) => {
     const currentQ = questions[currentIndex];
-    if (!currentQ || remainingSeconds <= 0) return;
+    if (!currentQ || isTimeExpired) return;
     saveQuestionUpdate(currentQ.snapshotId, { selectedOption: optionId });
   };
 
   const handleClearResponse = () => {
     const currentQ = questions[currentIndex];
-    if (!currentQ || remainingSeconds <= 0) return;
+    if (!currentQ || isTimeExpired) return;
     saveQuestionUpdate(currentQ.snapshotId, { selectedOption: null });
   };
 
   const handleToggleReview = () => {
     const currentQ = questions[currentIndex];
-    if (!currentQ || remainingSeconds <= 0) return;
+    if (!currentQ || isTimeExpired) return;
     saveQuestionUpdate(currentQ.snapshotId, {
       isMarkedForReview: !currentQ.isMarkedForReview,
     });
@@ -238,7 +271,7 @@ export function AssessmentPage() {
               variant="success"
               size="sm"
               onClick={() => setIsSubmitModalOpen(true)}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isTimeExpired}
             >
               <Send className="w-3.5 h-3.5 mr-1.5" />
               Submit Test
@@ -259,6 +292,16 @@ export function AssessmentPage() {
               onClose={() => setSaveErrorMessage(null)}
             >
               {saveErrorMessage}
+            </Alert>
+          )}
+
+          {isTimeExpired && (
+            <Alert
+              variant="warning"
+              title="Assessment Concluded"
+              className="mb-4"
+            >
+              Assessment time has concluded. Inputs are locked while finalization completes.
             </Alert>
           )}
 
@@ -285,12 +328,14 @@ export function AssessmentPage() {
 
               <button
                 type="button"
+                disabled={isTimeExpired}
                 onClick={handleToggleReview}
                 className={cn(
                   'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors border',
                   currentQ.isMarkedForReview
                     ? 'bg-amber-100 text-amber-800 border-amber-300'
-                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100',
+                  isTimeExpired && 'opacity-50 cursor-not-allowed pointer-events-none'
                 )}
               >
                 <Bookmark
@@ -320,19 +365,24 @@ export function AssessmentPage() {
                 return (
                   <label
                     key={opt.optionId}
-                    onClick={() => handleSelectOption(opt.optionId)}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (!isTimeExpired) handleSelectOption(opt.optionId);
+                    }}
                     className={cn(
-                      'flex items-center gap-3.5 p-4 rounded-xl border cursor-pointer transition-all select-none',
+                      'flex items-center gap-3.5 p-4 rounded-xl border transition-all select-none',
                       isSelected
                         ? 'border-indigo-600 bg-indigo-50/60 shadow-xs ring-1 ring-indigo-600'
-                        : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/50'
+                        : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/50',
+                      isTimeExpired ? 'opacity-60 cursor-not-allowed pointer-events-none' : 'cursor-pointer'
                     )}
                   >
                     <input
                       type="radio"
                       name={`question-${currentQ.snapshotId}`}
                       checked={isSelected}
-                      onChange={() => handleSelectOption(opt.optionId)}
+                      disabled={isTimeExpired}
+                      readOnly
                       className="sr-only"
                     />
                     <div
@@ -360,7 +410,7 @@ export function AssessmentPage() {
               variant="ghost"
               size="sm"
               onClick={handleClearResponse}
-              disabled={!currentQ.isAnswered}
+              disabled={!currentQ.isAnswered || isTimeExpired}
               className="text-slate-500 hover:text-slate-800"
             >
               <RotateCcw className="w-3.5 h-3.5 mr-1" />

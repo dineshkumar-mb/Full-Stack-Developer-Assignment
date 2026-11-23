@@ -7,12 +7,16 @@ const AuthContext = createContext(null);
 export const AuthProvider = ({ children }) => {
   const [candidateToken, setCandidateToken] = useState(() => localStorage.getItem('candidateToken'));
   const [candidate, setCandidate] = useState(null);
+  const [isLoadingCandidate, setIsLoadingCandidate] = useState(() => Boolean(localStorage.getItem('candidateToken')));
+
   const [adminToken, setAdminToken] = useState(() => localStorage.getItem('adminToken'));
   const [admin, setAdmin] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [isLoadingAdmin, setIsLoadingAdmin] = useState(() => Boolean(localStorage.getItem('adminToken')));
 
   // Initialize and verify stored sessions on mount
   useEffect(() => {
+    let isMounted = true;
+
     const initializeAuth = async () => {
       const storedCandToken = localStorage.getItem('candidateToken');
       const storedAdmToken = localStorage.getItem('adminToken');
@@ -24,14 +28,22 @@ export const AuthProvider = ({ children }) => {
           candidateService
             .getProfile()
             .then((res) => {
-              if (res.candidate) setCandidate(res.candidate);
+              if (!isMounted) return;
+              const profile = res.data?.candidate || res.candidate;
+              if (profile) setCandidate(profile);
             })
             .catch(() => {
+              if (!isMounted) return;
               localStorage.removeItem('candidateToken');
               setCandidateToken(null);
               setCandidate(null);
             })
+            .finally(() => {
+              if (isMounted) setIsLoadingCandidate(false);
+            })
         );
+      } else {
+        setIsLoadingCandidate(false);
       }
 
       if (storedAdmToken) {
@@ -39,39 +51,53 @@ export const AuthProvider = ({ children }) => {
           adminService
             .getMe()
             .then((res) => {
-              if (res.admin) setAdmin(res.admin);
+              if (!isMounted) return;
+              const adminProfile = res.data?.admin || res.admin;
+              if (adminProfile) setAdmin(adminProfile);
             })
             .catch(() => {
+              if (!isMounted) return;
               localStorage.removeItem('adminToken');
               setAdminToken(null);
               setAdmin(null);
             })
+            .finally(() => {
+              if (isMounted) setIsLoadingAdmin(false);
+            })
         );
+      } else {
+        setIsLoadingAdmin(false);
       }
 
       await Promise.allSettled(promises);
-      setLoading(false);
     };
 
     initializeAuth();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const loginCandidate = (token, candidateData) => {
     localStorage.setItem('candidateToken', token);
     setCandidateToken(token);
     setCandidate(candidateData);
+    setIsLoadingCandidate(false);
   };
 
   const logoutCandidate = () => {
     localStorage.removeItem('candidateToken');
     setCandidateToken(null);
     setCandidate(null);
+    setIsLoadingCandidate(false);
   };
 
   const loginAdmin = (token, adminData) => {
     localStorage.setItem('adminToken', token);
     setAdminToken(token);
     setAdmin(adminData);
+    setIsLoadingAdmin(false);
   };
 
   const logoutAdmin = () => {
@@ -81,6 +107,7 @@ export const AuthProvider = ({ children }) => {
       localStorage.removeItem('adminToken');
       setAdminToken(null);
       setAdmin(null);
+      setIsLoadingAdmin(false);
     }
   };
 
@@ -90,14 +117,16 @@ export const AuthProvider = ({ children }) => {
         candidate,
         candidateToken,
         isCandidateAuthenticated: Boolean(candidateToken),
+        isLoadingCandidate,
         loginCandidate,
         logoutCandidate,
         admin,
         adminToken,
         isAdminAuthenticated: Boolean(adminToken),
+        isLoadingAdmin,
         loginAdmin,
         logoutAdmin,
-        loading,
+        loading: isLoadingCandidate || isLoadingAdmin,
       }}
     >
       {children}

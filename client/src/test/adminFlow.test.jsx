@@ -1,8 +1,8 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
-import { AuthProvider } from '../context/AuthContext.jsx';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider, useAuth } from '../context/AuthContext.jsx';
 import adminService from '../services/adminService.js';
 
 import AdminLoginPage from '../pages/admin/AdminLoginPage.jsx';
@@ -10,6 +10,7 @@ import AdminDashboardPage from '../pages/admin/AdminDashboardPage.jsx';
 import QuestionManagementPage from '../pages/admin/QuestionManagementPage.jsx';
 import CandidateManagementPage from '../pages/admin/CandidateManagementPage.jsx';
 import SettingsPage from '../pages/admin/SettingsPage.jsx';
+import AdminProtectedRoute from '../routes/AdminProtectedRoute.jsx';
 
 vi.mock('../services/adminService.js');
 
@@ -21,10 +22,77 @@ const renderWithProviders = (ui, { route = '/admin/dashboard' } = {}) => {
   );
 };
 
+const AdminAuthStateInspector = () => {
+  const { admin, adminToken, isLoadingAdmin } = useAuth();
+  return (
+    <div>
+      <span data-testid="admin-loading">{String(isLoadingAdmin)}</span>
+      <span data-testid="admin-token">{adminToken || 'none'}</span>
+      <span data-testid="admin-email">{admin?.email || 'none'}</span>
+    </div>
+  );
+};
+
 describe('Admin Management & Analytics UI Flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+  });
+
+  describe('Admin Session & Route Protection', () => {
+    it('restores admin profile on refresh when valid token is stored', async () => {
+      localStorage.setItem('adminToken', 'stored-admin-token');
+      adminService.getMe.mockResolvedValueOnce({
+        data: {
+          admin: { email: 'admin@assessment.com', role: 'admin' },
+        },
+      });
+
+      renderWithProviders(<AdminAuthStateInspector />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('admin-loading')).toHaveTextContent('false');
+        expect(screen.getByTestId('admin-email')).toHaveTextContent('admin@assessment.com');
+        expect(screen.getByTestId('admin-token')).toHaveTextContent('stored-admin-token');
+      });
+      expect(adminService.getMe).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears stored admin token if token verification fails with 401', async () => {
+      localStorage.setItem('adminToken', 'invalid-admin-token');
+      const err = new Error('Invalid token');
+      err.status = 401;
+      adminService.getMe.mockRejectedValueOnce(err);
+
+      renderWithProviders(<AdminAuthStateInspector />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('admin-loading')).toHaveTextContent('false');
+        expect(screen.getByTestId('admin-token')).toHaveTextContent('none');
+        expect(screen.getByTestId('admin-email')).toHaveTextContent('none');
+      });
+      expect(localStorage.getItem('adminToken')).toBeNull();
+    });
+
+    it('AdminProtectedRoute blocks unauthenticated users and redirects to /admin/login', async () => {
+      render(
+        <MemoryRouter initialEntries={['/admin/dashboard']}>
+          <AuthProvider>
+            <Routes>
+              <Route path="/admin/login" element={<div>Admin Login Screen</div>} />
+              <Route element={<AdminProtectedRoute />}>
+                <Route path="/admin/dashboard" element={<div>Protected Dashboard</div>} />
+              </Route>
+            </Routes>
+          </AuthProvider>
+        </MemoryRouter>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Admin Login Screen')).toBeInTheDocument();
+        expect(screen.queryByText('Protected Dashboard')).not.toBeInTheDocument();
+      });
+    });
   });
 
   describe('Admin Login', () => {
@@ -95,13 +163,14 @@ describe('Admin Management & Analytics UI Flow', () => {
         expect(screen.getByText('18')).toBeInTheDocument(); // Completed
         expect(screen.getByText('72.22%')).toBeInTheDocument(); // Pass Rate
         expect(screen.getByText('12.5')).toBeInTheDocument(); // Average score
+        expect(screen.getByText('19')).toBeInTheDocument(); // Highest score
       });
     });
   });
 
-  describe('Question Management Page', () => {
-    it('displays 10-active invariant status and questions list', async () => {
-      adminService.getQuestions.mockResolvedValueOnce({
+  describe('Question Management & Atomic Swap', () => {
+    it('displays 10-active invariant status and allows opening atomic swap modal', async () => {
+      adminService.getQuestions.mockResolvedValue({
         data: {
           questions: [
             {
@@ -119,9 +188,28 @@ describe('Admin Management & Analytics UI Flow', () => {
                 { optionId: 'D', text: '4' },
               ],
             },
+            {
+              _id: 'q-reserve',
+              questionText: 'Reserve question text for replacement.',
+              category: 'Quantitative',
+              difficulty: 'Easy',
+              correctOption: 'A',
+              isActive: false,
+              activeSlot: null,
+              options: [
+                { optionId: 'A', text: '10' },
+                { optionId: 'B', text: '20' },
+                { optionId: 'C', text: '30' },
+                { optionId: 'D', text: '40' },
+              ],
+            },
           ],
-          pagination: { page: 1, totalPages: 1, total: 1 },
+          pagination: { page: 1, totalPages: 1, total: 2 },
         },
+      });
+
+      adminService.updateQuestionStatus.mockResolvedValueOnce({
+        data: { success: true },
       });
 
       renderWithProviders(<QuestionManagementPage />);
@@ -131,11 +219,19 @@ describe('Admin Management & Analytics UI Flow', () => {
         expect(screen.getByText(/Evaluate log base 10 of 1000/i)).toBeInTheDocument();
         expect(screen.getByText(/Slot #1/i)).toBeInTheDocument();
       });
+
+      // Click swap icon button
+      const swapBtn = screen.getByTitle(/Swap with inactive question/i);
+      fireEvent.click(swapBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Atomic Question Replacement/i)).toBeInTheDocument();
+      });
     });
   });
 
-  describe('Candidate Management Page', () => {
-    it('renders candidates table and export action buttons', async () => {
+  describe('Candidate Management & File Exports', () => {
+    it('renders candidates table and triggers CSV and Excel export downloads', async () => {
       adminService.getCandidates.mockResolvedValueOnce({
         data: {
           candidates: [
@@ -155,14 +251,41 @@ describe('Admin Management & Analytics UI Flow', () => {
         },
       });
 
+      adminService.exportCandidatesCsv.mockResolvedValueOnce({
+        data: 'FullName,Email,Score\nAlice Smith,alice@example.com,16',
+      });
+
+      adminService.exportCandidatesExcel.mockResolvedValueOnce({
+        data: '<?xml version="1.0"?><Workbook>...</Workbook>',
+      });
+
+      // Mock URL.createObjectURL and revokeObjectURL
+      window.URL.createObjectURL = vi.fn(() => 'blob:mock-url');
+      window.URL.revokeObjectURL = vi.fn();
+
       renderWithProviders(<CandidateManagementPage />);
 
       await waitFor(() => {
         expect(screen.getByText('Alice Smith')).toBeInTheDocument();
         expect(screen.getByText('alice@example.com')).toBeInTheDocument();
         expect(screen.getByText('16 / 20')).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /Export CSV/i })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /Export Excel/i })).toBeInTheDocument();
+      });
+
+      // Trigger CSV export
+      const csvBtn = screen.getByRole('button', { name: /Export CSV/i });
+      fireEvent.click(csvBtn);
+
+      await waitFor(() => {
+        expect(adminService.exportCandidatesCsv).toHaveBeenCalledTimes(1);
+        expect(window.URL.createObjectURL).toHaveBeenCalledTimes(1);
+      });
+
+      // Trigger Excel export
+      const excelBtn = screen.getByRole('button', { name: /Export Excel/i });
+      fireEvent.click(excelBtn);
+
+      await waitFor(() => {
+        expect(adminService.exportCandidatesExcel).toHaveBeenCalledTimes(1);
       });
     });
   });

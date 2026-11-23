@@ -1,11 +1,17 @@
 import '@testing-library/jest-dom';
 
-// Mock ResizeObserver for Recharts / responsive layout in JSDOM
-global.ResizeObserver = class ResizeObserver {
+// Comprehensive ResizeObserver mock for Recharts & responsive layout in JSDOM
+class ResizeObserverMock {
+  constructor(callback) {
+    this.callback = callback;
+  }
   observe() {}
   unobserve() {}
   disconnect() {}
-};
+}
+
+window.ResizeObserver = ResizeObserverMock;
+global.ResizeObserver = ResizeObserverMock;
 
 // Mock matchMedia for JSDOM
 Object.defineProperty(window, 'matchMedia', {
