@@ -50,6 +50,10 @@ const questionSnapshotSchema = new mongoose.Schema(
       enum: ['A', 'B', 'C', 'D', null],
       default: null,
     },
+    clientSequence: {
+      type: Number,
+      default: 0,
+    },
     isMarkedForReview: {
       type: Boolean,
       default: false,

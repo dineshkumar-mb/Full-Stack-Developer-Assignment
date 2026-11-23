@@ -72,6 +72,7 @@ export const updateAnswerSchema = z
       .nullable()
       .optional(),
     isMarkedForReview: z.boolean().optional(),
+    sequence: z.number().int().positive().optional(),
   })
   .refine((data) => data.selectedOption !== undefined || data.isMarkedForReview !== undefined, {
     message: 'Either selectedOption or isMarkedForReview must be provided',

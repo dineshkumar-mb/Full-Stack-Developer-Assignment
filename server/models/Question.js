@@ -91,9 +91,16 @@ const questionSchema = new mongoose.Schema(
     },
     activeSlot: {
       type: Number,
-      min: 1,
-      max: 10,
       default: null,
+      validate: [
+        {
+          validator: function (v) {
+            if (v === null || v === undefined) return true;
+            return Number.isInteger(v) && v >= 1 && v <= 10;
+          },
+          message: 'activeSlot must be an integer between 1 and 10 or null',
+        },
+      ],
     },
   },
   {
@@ -101,24 +108,42 @@ const questionSchema = new mongoose.Schema(
   }
 );
 
-questionSchema.index({ activeSlot: 1 }, { unique: true, partialFilterExpression: { isActive: true } });
+// Engine-level partial unique index strictly preventing duplicate active slots
+questionSchema.index(
+  { activeSlot: 1 },
+  { unique: true, partialFilterExpression: { isActive: true } }
+);
 questionSchema.index({ createdAt: -1 });
 
-// Pre-save validation: Check that the correct option matches one of the provided options
+// Pre-validate validation: Check option coverage and slot-activation invariants
 questionSchema.pre('validate', function (next) {
   if (this.options && this.correctOption) {
     const validIds = this.options.map((o) => o.optionId);
     if (!validIds.includes(this.correctOption)) {
-      return next(new Error(`Correct option '${this.correctOption}' does not match any option ID`));
+      return next(new ApiError(400, `Correct option '${this.correctOption}' does not match any option ID`));
     }
   }
+
+  // Cross-field invariant validation
+  if (this.isActive === true) {
+    if (this.activeSlot !== undefined && this.activeSlot !== null) {
+      if (!Number.isInteger(this.activeSlot) || this.activeSlot < 1 || this.activeSlot > 10) {
+        return next(new ApiError(400, 'Active questions must have an integer activeSlot between 1 and 10'));
+      }
+    }
+  } else if (this.isActive === false) {
+    if (this.activeSlot !== null && this.activeSlot !== undefined) {
+      return next(new ApiError(400, 'Inactive questions must have activeSlot null'));
+    }
+  }
+
   next();
 });
 
 // Guard against exceeding maximum 10 active questions via database-safe slot allocation
 questionSchema.pre('save', async function (next) {
   if (this.isActive) {
-    if (!this.activeSlot) {
+    if (this.activeSlot === null || this.activeSlot === undefined) {
       const occupiedSlots = await this.constructor
         .find({ isActive: true, activeSlot: { $ne: null } })
         .distinct('activeSlot');
@@ -131,12 +156,83 @@ questionSchema.pre('save', async function (next) {
         );
       }
       this.activeSlot = freeSlot;
+    } else {
+      if (!Number.isInteger(this.activeSlot) || this.activeSlot < 1 || this.activeSlot > 10) {
+        return next(new ApiError(400, 'activeSlot must be an integer between 1 and 10'));
+      }
     }
   } else {
     this.activeSlot = null;
   }
   next();
 });
+
+// Query Middleware to enforce slot invariants across all update paths
+function validateUpdateInvariants(next) {
+  const update = this.getUpdate();
+  if (!update) return next();
+
+  const setObj = update.$set || update;
+
+  // Validate activeSlot if being modified
+  if (setObj.activeSlot !== undefined) {
+    const slot = setObj.activeSlot;
+    if (slot !== null) {
+      if (!Number.isInteger(slot) || slot < 1 || slot > 10) {
+        return next(new ApiError(400, 'activeSlot must be an integer between 1 and 10 or null'));
+      }
+    }
+  }
+
+  // Active question cannot have null or missing activeSlot
+  if (setObj.isActive === true && setObj.activeSlot === null) {
+    return next(new ApiError(400, 'Active questions cannot have a null activeSlot'));
+  }
+
+  // Inactive question cannot have a non-null activeSlot
+  if (setObj.isActive === false && setObj.activeSlot !== null && setObj.activeSlot !== undefined) {
+    return next(new ApiError(400, 'Inactive questions must have activeSlot null'));
+  }
+
+  next();
+}
+
+questionSchema.pre('findOneAndUpdate', validateUpdateInvariants);
+questionSchema.pre('updateOne', validateUpdateInvariants);
+questionSchema.pre('updateMany', validateUpdateInvariants);
+
+/**
+ * Applies collection-level validation rules on the questions collection in MongoDB
+ */
+export async function ensureQuestionCollectionValidator(db) {
+  if (!db) return;
+  try {
+    await db.command({
+      collMod: 'questions',
+      validator: {
+        $expr: {
+          $cond: {
+            if: { $eq: ['$isActive', true] },
+            then: {
+              $and: [
+                { $ne: ['$activeSlot', null] },
+                { $gte: ['$activeSlot', 1] },
+                { $lte: ['$activeSlot', 10] },
+                { $eq: [{ $floor: '$activeSlot' }, '$activeSlot'] },
+              ],
+            },
+            else: {
+              $eq: ['$activeSlot', null],
+            },
+          },
+        },
+      },
+      validationLevel: 'moderate',
+    });
+  } catch {
+    // If collection does not exist yet or collMod not supported on the driver session, ignore
+  }
+}
 
 export const Question = mongoose.model('Question', questionSchema);
 export default Question;

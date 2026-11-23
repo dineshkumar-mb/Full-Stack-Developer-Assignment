@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import env from './environment.js';
+import { ensureQuestionCollectionValidator } from '../models/Question.js';
 
 let isConnected = false;
 
@@ -22,6 +23,10 @@ export const connectDB = async (customUri = null) => {
 
     isConnected = true;
     console.log(`[Database] MongoDB Connected: ${conn.connection.host || 'in-memory'}`);
+
+    if (conn.connection.db) {
+      ensureQuestionCollectionValidator(conn.connection.db).catch(() => {});
+    }
 
     mongoose.connection.on('error', (err) => {
       console.error(`[Database Error] Connection error: ${err.message}`);

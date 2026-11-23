@@ -140,7 +140,7 @@ export async function updateCandidateAnswer(candidateId, questionSnapshotId, upd
   }
 
   if (attempt.status !== 'in_progress') {
-    throw ApiError.badRequest('Assessment is already completed and cannot be modified');
+    throw ApiError.alreadyFinalized('Assessment is already completed and cannot be modified');
   }
 
   // Strict Server-Authoritative Timer: Answer modifications stop immediately at expiresAt
@@ -163,6 +163,18 @@ export async function updateCandidateAnswer(candidateId, questionSnapshotId, upd
   }
 
   const snapshot = attempt.questionSnapshots[snapshotIndex];
+
+  // Enforce monotonic clientSequence ordering:
+  // If a delayed, older sequence request arrives after a newer sequence was already recorded,
+  // do not overwrite the newer state in the database.
+  if (updates.sequence !== undefined) {
+    const incomingSeq = Number(updates.sequence);
+    const existingSeq = Number(snapshot.clientSequence || 0);
+    if (incomingSeq < existingSeq) {
+      return snapshot;
+    }
+    snapshot.clientSequence = incomingSeq;
+  }
 
   // Apply updates
   if (updates.selectedOption !== undefined) {
@@ -195,19 +207,33 @@ export async function updateCandidateAnswer(candidateId, questionSnapshotId, upd
     // Check if expired or version conflicted
     const refreshed = await Attempt.findById(attempt._id);
     if (!refreshed || refreshed.status !== 'in_progress' || Date.now() >= new Date(refreshed.expiresAt).getTime()) {
+      if (refreshed && refreshed.status !== 'in_progress') {
+        throw ApiError.alreadyFinalized('Assessment is already completed and cannot be modified');
+      }
       throw ApiError.badRequest('Assessment has expired or completed. Changes could not be saved.');
     }
+
+    const refreshedSnapshot = refreshed.questionSnapshots[snapshotIndex];
+    if (updates.sequence !== undefined) {
+      const incomingSeq = Number(updates.sequence);
+      const existingSeq = Number(refreshedSnapshot.clientSequence || 0);
+      if (incomingSeq < existingSeq) {
+        return refreshedSnapshot;
+      }
+      refreshedSnapshot.clientSequence = incomingSeq;
+    }
+
     // Retry once on version conflict, strictly enforcing database-level expiry and concurrency filter
-    refreshed.questionSnapshots[snapshotIndex].candidateAnswer =
+    refreshedSnapshot.candidateAnswer =
       updates.selectedOption !== undefined
         ? updates.selectedOption
-        : refreshed.questionSnapshots[snapshotIndex].candidateAnswer;
-    refreshed.questionSnapshots[snapshotIndex].isMarkedForReview =
+        : refreshedSnapshot.candidateAnswer;
+    refreshedSnapshot.isMarkedForReview =
       updates.isMarkedForReview !== undefined
         ? updates.isMarkedForReview
-        : refreshed.questionSnapshots[snapshotIndex].isMarkedForReview;
+        : refreshedSnapshot.isMarkedForReview;
     if (updates.selectedOption !== undefined) {
-      refreshed.questionSnapshots[snapshotIndex].answeredAt = updates.selectedOption ? new Date() : null;
+      refreshedSnapshot.answeredAt = updates.selectedOption ? new Date() : null;
     }
 
     const retriedAttempt = await Attempt.findOneAndUpdate(
@@ -219,7 +245,7 @@ export async function updateCandidateAnswer(candidateId, questionSnapshotId, upd
       },
       {
         $set: {
-          [`questionSnapshots.${snapshotIndex}`]: refreshed.questionSnapshots[snapshotIndex],
+          [`questionSnapshots.${snapshotIndex}`]: refreshedSnapshot,
         },
         $inc: { version: 1 },
       },

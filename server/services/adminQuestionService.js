@@ -1,6 +1,94 @@
+import mongoose from 'mongoose';
 import { Question } from '../models/Question.js';
 import { Attempt } from '../models/Attempt.js';
+import { ReplacementJournal } from '../models/ReplacementJournal.js';
 import ApiError from '../utils/ApiError.js';
+
+let txSupportedCache = null;
+
+/**
+ * Checks whether the active MongoDB deployment supports multi-document transactions.
+ */
+export async function supportsTransactions() {
+  if (txSupportedCache !== null) {
+    return txSupportedCache;
+  }
+
+  try {
+    const topology = mongoose.connection?.client?.topology;
+    if (topology) {
+      const serverType = topology.description?.type;
+      if (serverType === 'Single') {
+        txSupportedCache = false;
+        return false;
+      }
+    }
+
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction();
+      await mongoose.connection.db.command({ ping: 1 }, { session });
+      await session.abortTransaction();
+      txSupportedCache = true;
+      return true;
+    } catch {
+      txSupportedCache = false;
+      return false;
+    } finally {
+      await session.endSession();
+    }
+  } catch {
+    txSupportedCache = false;
+    return false;
+  }
+}
+
+/**
+ * Reconciles any interrupted/unfinalized question replacement operations found in the journal.
+ * Guarantees crash recovery and system convergence to exactly 10 active questions.
+ */
+export async function reconcilePendingReplacements() {
+  const pendingJournals = await ReplacementJournal.find({ status: 'deactivated' });
+  let reconciled = 0;
+
+  for (const journal of pendingJournals) {
+    const activeSlot = journal.activeSlot;
+
+    // Check if slot is occupied
+    const slotOccupant = await Question.findOne({ isActive: true, activeSlot });
+
+    if (!slotOccupant) {
+      // Slot is empty - interrupted during replacement!
+      // Attempt to activate replacement question
+      const replacementActivated = await Question.findOneAndUpdate(
+        { _id: journal.replacementQuestionId, isActive: false },
+        { $set: { isActive: true, activeSlot } },
+        { new: true }
+      );
+
+      if (replacementActivated) {
+        journal.status = 'completed';
+        await journal.save();
+        reconciled++;
+      } else {
+        // Rollback original question to active slot
+        await Question.findOneAndUpdate(
+          { _id: journal.activeQuestionId, isActive: false },
+          { $set: { isActive: true, activeSlot } }
+        );
+        journal.status = 'rolled_back';
+        await journal.save();
+        reconciled++;
+      }
+    } else {
+      // Slot is already occupied
+      journal.status = 'completed';
+      await journal.save();
+    }
+  }
+
+  return reconciled;
+}
 
 /**
  * Retrieves paginated questions with search, filtering, and sorting.
@@ -70,6 +158,11 @@ export async function createQuestion(data) {
         'Maximum 10 active questions permitted in the system. Deactivate another question first.'
       );
     }
+    if (!data.activeSlot) {
+      const occupiedSlots = await Question.find({ isActive: true }).distinct('activeSlot');
+      const freeSlot = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].find((s) => !occupiedSlots.includes(s));
+      data.activeSlot = freeSlot;
+    }
   }
 
   const question = new Question(data);
@@ -119,7 +212,7 @@ export async function updateQuestion(id, data) {
 }
 
 /**
- * Updates question activation status, supporting atomic swap with a replacement question.
+ * Updates question activation status, supporting atomic & crash-safe swap with a replacement question.
  */
 export async function updateQuestionStatus(id, isActive, replacementQuestionId = null) {
   const question = await Question.findById(id);
@@ -164,32 +257,100 @@ export async function updateQuestionStatus(id, isActive, replacementQuestionId =
         throw ApiError.badRequest('Target question does not hold a valid active slot');
       }
 
-      // Atomically mark current question inactive
-      const deactivated = await Question.findOneAndUpdate(
-        { _id: question._id, isActive: true, activeSlot: currentSlot },
-        { $set: { isActive: false, activeSlot: null } },
-        { new: true }
-      );
+      const hasTx = await supportsTransactions();
 
-      if (!deactivated) {
-        throw ApiError.conflict('Question was concurrently deactivated or modified by another operation.');
-      }
+      if (hasTx) {
+        // Preferred execution path: Multi-document transaction across replica set
+        const session = await mongoose.startSession();
+        try {
+          let deactivatedResult = null;
+          await session.withTransaction(async () => {
+            const journal = await ReplacementJournal.create(
+              [
+                {
+                  activeQuestionId: question._id,
+                  replacementQuestionId: replacement._id,
+                  activeSlot: currentSlot,
+                  status: 'initiated',
+                },
+              ],
+              { session }
+            );
 
-      // Activate replacement question in the vacated slot with compensation rollback
-      try {
-        replacement.isActive = true;
-        replacement.activeSlot = currentSlot;
-        await replacement.save();
-      } catch (err) {
-        // Rollback original question to active state if replacement activation fails
-        await Question.findByIdAndUpdate(question._id, {
-          isActive: true,
+            deactivatedResult = await Question.findOneAndUpdate(
+              { _id: question._id, isActive: true, activeSlot: currentSlot },
+              { $set: { isActive: false, activeSlot: null } },
+              { new: true, session }
+            );
+
+            if (!deactivatedResult) {
+              throw ApiError.conflict('Question was concurrently deactivated or modified by another operation.');
+            }
+
+            const activated = await Question.findOneAndUpdate(
+              { _id: replacement._id, isActive: false, activeSlot: null },
+              { $set: { isActive: true, activeSlot: currentSlot } },
+              { new: true, session }
+            );
+
+            if (!activated) {
+              throw ApiError.conflict('Replacement question could not be activated in transaction.');
+            }
+
+            await ReplacementJournal.findByIdAndUpdate(
+              journal[0]._id,
+              { status: 'completed' },
+              { session }
+            );
+          });
+
+          return deactivatedResult;
+        } finally {
+          await session.endSession();
+        }
+      } else {
+        // Fallback execution path: Persistent journal with compensation & crash recovery
+        const journal = await ReplacementJournal.create({
+          activeQuestionId: question._id,
+          replacementQuestionId: replacement._id,
           activeSlot: currentSlot,
+          status: 'initiated',
         });
-        throw err;
-      }
 
-      return deactivated;
+        // 1. Atomically deactivate target question
+        const deactivated = await Question.findOneAndUpdate(
+          { _id: question._id, isActive: true, activeSlot: currentSlot },
+          { $set: { isActive: false, activeSlot: null } },
+          { new: true }
+        );
+
+        if (!deactivated) {
+          throw ApiError.conflict('Question was concurrently deactivated or modified by another operation.');
+        }
+
+        journal.status = 'deactivated';
+        await journal.save();
+
+        // 2. Atomically activate replacement question
+        try {
+          replacement.isActive = true;
+          replacement.activeSlot = currentSlot;
+          await replacement.save();
+
+          journal.status = 'completed';
+          await journal.save();
+          return deactivated;
+        } catch (err) {
+          // Rollback original question to active slot
+          await Question.findOneAndUpdate(
+            { _id: question._id, isActive: false },
+            { $set: { isActive: true, activeSlot: currentSlot } }
+          );
+          journal.status = 'rolled_back';
+          await journal.save();
+          throw err;
+        }
+      }
     }
 
     question.isActive = false;
@@ -234,6 +395,8 @@ export async function deleteQuestion(id) {
 }
 
 export default {
+  supportsTransactions,
+  reconcilePendingReplacements,
   listQuestions,
   getQuestionById,
   createQuestion,

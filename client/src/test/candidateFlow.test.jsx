@@ -284,9 +284,10 @@ describe('Candidate Assessment UI Flow', () => {
       fireEvent.click(optionA);
 
       await waitFor(() => {
-        expect(assessmentService.saveAnswer).toHaveBeenCalledWith('s1', {
-          selectedOption: 'A',
-        });
+        expect(assessmentService.saveAnswer).toHaveBeenCalledWith(
+          's1',
+          expect.objectContaining({ selectedOption: 'A' })
+        );
       });
     });
 
@@ -379,13 +380,82 @@ describe('Candidate Assessment UI Flow', () => {
       });
     });
 
-    it('smoothly routes to result if attempt was already finalized on the server (400 / 409)', async () => {
+    it('smoothly routes to result if attempt was already finalized on the server (ATTEMPT_ALREADY_FINALIZED)', async () => {
       assessmentService.getCurrentAttempt.mockResolvedValueOnce({
         data: { attempt: makeMockAttempt() },
       });
       const conflictErr = new Error('Assessment already submitted');
-      conflictErr.status = 400;
-      conflictErr.response = { status: 400, data: { message: 'Attempt is already finalized' } };
+      conflictErr.status = 409;
+      conflictErr.code = 'ATTEMPT_ALREADY_FINALIZED';
+      conflictErr.response = {
+        status: 409,
+        data: { message: 'Attempt is already finalized', code: 'ATTEMPT_ALREADY_FINALIZED' },
+      };
+      assessmentService.submitAssessment.mockRejectedValueOnce(conflictErr);
+      assessmentService.getResult.mockResolvedValueOnce({
+        data: { result: { attemptId: 'att1' } },
+      });
+
+      renderWithProviders(
+        <Routes>
+          <Route path="/" element={<AssessmentPage />} />
+          <Route path="/result" element={<div>Result Page Transition</div>} />
+        </Routes>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Submit Test/i })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Submit Test/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Confirm Submission/i }));
+
+      await waitFor(() => {
+        expect(assessmentService.getResult).toHaveBeenCalledTimes(1);
+        expect(screen.getByText('Result Page Transition')).toBeInTheDocument();
+      });
+    });
+
+    it('stays on page and displays validation error for 400 invalid request', async () => {
+      assessmentService.getCurrentAttempt.mockResolvedValueOnce({
+        data: { attempt: makeMockAttempt() },
+      });
+      const validationErr = new Error('Invalid submission payload');
+      validationErr.status = 400;
+      validationErr.response = { status: 400, data: { message: 'Invalid submission payload' } };
+      assessmentService.submitAssessment.mockRejectedValueOnce(validationErr);
+
+      renderWithProviders(
+        <Routes>
+          <Route path="/" element={<AssessmentPage />} />
+          <Route path="/result" element={<div>Result Page Transition</div>} />
+        </Routes>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Submit Test/i })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Submit Test/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Confirm Submission/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Invalid submission payload')).toBeInTheDocument();
+        expect(screen.queryByText('Result Page Transition')).not.toBeInTheDocument();
+      });
+    });
+
+    it('stays on page and displays conflict error for non-finalized 409 conflict', async () => {
+      assessmentService.getCurrentAttempt.mockResolvedValueOnce({
+        data: { attempt: makeMockAttempt() },
+      });
+      const conflictErr = new Error('Concurrent modification conflict');
+      conflictErr.status = 409;
+      conflictErr.code = 'VERSION_CONFLICT';
+      conflictErr.response = {
+        status: 409,
+        data: { message: 'Concurrent modification conflict', code: 'VERSION_CONFLICT' },
+      };
       assessmentService.submitAssessment.mockRejectedValueOnce(conflictErr);
 
       renderWithProviders(
@@ -403,7 +473,36 @@ describe('Candidate Assessment UI Flow', () => {
       fireEvent.click(screen.getByRole('button', { name: /Confirm Submission/i }));
 
       await waitFor(() => {
-        expect(screen.getByText('Result Page Transition')).toBeInTheDocument();
+        expect(screen.getByText('Concurrent modification conflict')).toBeInTheDocument();
+        expect(screen.queryByText('Result Page Transition')).not.toBeInTheDocument();
+      });
+    });
+
+    it('stays on page and displays network error, resetting submission lock for retry', async () => {
+      assessmentService.getCurrentAttempt.mockResolvedValueOnce({
+        data: { attempt: makeMockAttempt() },
+      });
+      const netErr = new Error('Network error submitting test. Please try again.');
+      netErr.response = undefined;
+      assessmentService.submitAssessment.mockRejectedValueOnce(netErr);
+
+      renderWithProviders(
+        <Routes>
+          <Route path="/" element={<AssessmentPage />} />
+          <Route path="/result" element={<div>Result Page Transition</div>} />
+        </Routes>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Submit Test/i })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Submit Test/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Confirm Submission/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Network error submitting test/i)).toBeInTheDocument();
+        expect(screen.queryByText('Result Page Transition')).not.toBeInTheDocument();
       });
     });
 
@@ -425,9 +524,10 @@ describe('Candidate Assessment UI Flow', () => {
       fireEvent.click(reviewButton);
 
       await waitFor(() => {
-        expect(assessmentService.saveAnswer).toHaveBeenCalledWith('s1', {
-          isMarkedForReview: true,
-        });
+        expect(assessmentService.saveAnswer).toHaveBeenCalledWith(
+          's1',
+          expect.objectContaining({ isMarkedForReview: true })
+        );
       });
     });
   });

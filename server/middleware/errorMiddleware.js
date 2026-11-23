@@ -44,6 +44,7 @@ export const errorMiddleware = (err, req, res, next) => {
     success: false,
     message,
     errors: Array.isArray(errors) ? errors : [errors],
+    ...(err.code && { code: err.code }),
     ...(env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 };

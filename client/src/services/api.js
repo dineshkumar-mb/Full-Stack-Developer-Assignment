@@ -57,6 +57,7 @@ apiClient.interceptors.response.use(
     formattedError.status = status;
     formattedError.response = error.response;
     formattedError.errors = errorResponse?.errors || [];
+    formattedError.code = errorResponse?.code;
     formattedError.raw = errorResponse;
 
     return Promise.reject(formattedError);

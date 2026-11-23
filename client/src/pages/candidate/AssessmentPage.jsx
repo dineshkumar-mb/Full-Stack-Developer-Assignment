@@ -37,6 +37,7 @@ export function AssessmentPage() {
   const expiresAtRef = useRef(null);
   const clockSkewRef = useRef(0); // client-to-server clock drift in ms
   const requestSequenceRef = useRef({}); // per-snapshot monotonic sequence tracker
+  const saveQueueRef = useRef({}); // per-snapshot serialized promise queue
   const isSubmittingRef = useRef(false);
 
   // Submit assessment handler (memoized for timer auto-submit)
@@ -44,23 +45,43 @@ export function AssessmentPage() {
     if (isSubmittingRef.current) return;
     isSubmittingRef.current = true;
     setIsSubmitting(true);
+    setSaveErrorMessage(null);
 
     try {
       await assessmentService.submitAssessment();
       setIsSubmitModalOpen(false);
       navigate('/result', { replace: true });
     } catch (err) {
-      // If already submitted/expired on server (400, 403, 409), attempt is finalized -> route to result
-      const status = err.response?.status || err.status;
-      if (status === 400 || status === 403 || status === 409) {
-        navigate('/result', { replace: true });
+      const errCode = err.raw?.code || err.response?.data?.code || err.code;
+      const errMsg = err.response?.data?.message || err.message || '';
+      const isFinalized =
+        errCode === 'ATTEMPT_ALREADY_FINALIZED' ||
+        errMsg.toLowerCase().includes('already finalized') ||
+        errMsg.toLowerCase().includes('already submitted');
+
+      if (isFinalized) {
+        try {
+          // Retrieve final result from backend before displaying
+          await assessmentService.getResult();
+          setIsSubmitModalOpen(false);
+          navigate('/result', { replace: true });
+          return;
+        } catch {
+          setSaveErrorMessage(
+            'Assessment has been finalized, but results could not be retrieved. Please refresh.'
+          );
+        }
+      } else if (err.response?.status === 400 || err.status === 400) {
+        setSaveErrorMessage(errMsg || 'Validation error during submission.');
+      } else if (err.response?.status === 409 || err.status === 409) {
+        setSaveErrorMessage(errMsg || 'Submission conflict. Please try again.');
       } else {
         setSaveErrorMessage(
-          err.response?.data?.message || err.message || 'Submission failed. Please try again.'
+          errMsg || 'Network error submitting test. Please try again.'
         );
-        isSubmittingRef.current = false;
-        setIsSubmitting(false);
       }
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
     }
   }, [navigate]);
 
@@ -144,8 +165,8 @@ export function AssessmentPage() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
-  // Save answer or review flag with sequence-based race condition protection
-  const saveQuestionUpdate = async (snapshotId, updates) => {
+  // Save answer or review flag with serialized queue and sequence-based race condition protection
+  const saveQuestionUpdate = (snapshotId, updates) => {
     if (Boolean(attempt) && remainingSeconds <= 0) return;
 
     // Increment request sequence for this snapshot to prevent out-of-order race conditions
@@ -171,25 +192,36 @@ export function AssessmentPage() {
       )
     );
 
-    try {
-      await assessmentService.saveAnswer(snapshotId, updates);
+    // Queue requests per snapshot to ensure in-order serialized dispatch
+    const previousPromise = saveQueueRef.current[snapshotId] || Promise.resolve();
+    const currentPromise = previousPromise
+      .catch(() => {}) // Don't block subsequent requests if earlier one failed
+      .then(async () => {
+        try {
+          await assessmentService.saveAnswer(snapshotId, {
+            ...updates,
+            sequence: currentSeq,
+          });
 
-      // Only transition to "saved" if this request is still the latest one for this question
-      if (requestSequenceRef.current[snapshotId] === currentSeq) {
-        setSavingStatus('saved');
-        setTimeout(() => {
-          setSavingStatus((curr) => (curr === 'saved' ? 'idle' : curr));
-        }, 2000);
-      }
-    } catch (err) {
-      // If a newer request was dispatched while this request was in flight, do not report stale error
-      if (requestSequenceRef.current[snapshotId] === currentSeq) {
-        setSavingStatus('error');
-        setSaveErrorMessage(
-          err.response?.data?.message || err.message || 'Failed to save your answer. Check connection.'
-        );
-      }
-    }
+          // Only transition to "saved" if this request is still the latest one for this question
+          if (requestSequenceRef.current[snapshotId] === currentSeq) {
+            setSavingStatus('saved');
+            setTimeout(() => {
+              setSavingStatus((curr) => (curr === 'saved' ? 'idle' : curr));
+            }, 2000);
+          }
+        } catch (err) {
+          // If a newer request was dispatched while this request was in flight, do not report stale error
+          if (requestSequenceRef.current[snapshotId] === currentSeq) {
+            setSavingStatus('error');
+            setSaveErrorMessage(
+              err.response?.data?.message || err.message || 'Failed to save your answer. Check connection.'
+            );
+          }
+        }
+      });
+
+    saveQueueRef.current[snapshotId] = currentPromise;
   };
 
   const isTimeExpired = Boolean(attempt) && remainingSeconds <= 0;
