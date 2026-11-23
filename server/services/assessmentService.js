@@ -144,7 +144,8 @@ export async function updateCandidateAnswer(candidateId, questionSnapshotId, upd
 
   // Strict Server-Authoritative Timer: Answer modifications stop immediately at expiresAt
   const now = Date.now();
-  if (now > new Date(attempt.expiresAt).getTime()) {
+  const expiresAtMs = new Date(attempt.expiresAt).getTime();
+  if (now >= expiresAtMs) {
     throw ApiError.badRequest('Assessment time limit has expired. Answers cannot be changed.');
   }
 
@@ -192,7 +193,7 @@ export async function updateCandidateAnswer(candidateId, questionSnapshotId, upd
   if (!updatedAttempt) {
     // Check if expired or version conflicted
     const refreshed = await Attempt.findById(attempt._id);
-    if (!refreshed || refreshed.status !== 'in_progress' || Date.now() > new Date(refreshed.expiresAt).getTime()) {
+    if (!refreshed || refreshed.status !== 'in_progress' || Date.now() >= new Date(refreshed.expiresAt).getTime()) {
       throw ApiError.badRequest('Assessment has expired or completed. Changes could not be saved.');
     }
     // Retry once on version conflict
@@ -253,7 +254,7 @@ export async function submitAssessment(candidateId) {
 
   // Determine submission type based on server time
   let submissionType = 'manual';
-  if (now > expiresAtMs) {
+  if (now >= expiresAtMs) {
     submissionType = 'auto_timeout';
   }
 
@@ -304,9 +305,18 @@ export async function finalizeAttemptAtomically(attemptId, submissionType = 'man
     { new: true }
   );
 
-  // If null, another concurrent process finalized it -> reload and return
+  // If null, either another concurrent process finalized it, or an answer update incremented version
   if (!updatedAttempt) {
-    return Attempt.findById(attemptId);
+    const reloaded = await Attempt.findById(attemptId);
+    if (!reloaded) {
+      throw ApiError.notFound('Assessment attempt not found during finalization');
+    }
+    // If already finalized by a competing submission or worker, return it
+    if (reloaded.status === 'completed' || reloaded.status === 'timed_out') {
+      return reloaded;
+    }
+    // If it failed due to a concurrent answer version change, safely retry finalization with updated state
+    return finalizeAttemptAtomically(attemptId, submissionType);
   }
 
   // Update candidate status
