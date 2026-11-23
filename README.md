@@ -495,7 +495,7 @@ cd server
 npm run test
 ```
 
-**Test Suite Coverage (101 tests across 12 files):**
+**Test Suite Coverage (104 tests across 12 files):**
 - `tests/models.test.js`: 15 tests (Admin, Candidate, Question, Settings, Attempt validations & activeSlot concurrency)
 - `tests/authAndMiddleware.test.js`: 5 tests (Bcrypt, JWT verification, RBAC, error handlers)
 - `tests/healthAndSeed.test.js`: 3 tests (Healthcheck, seeder idempotency, 4/3/3 question category distribution)
@@ -505,6 +505,6 @@ npm run test
 - `tests/timerBoundariesAndConcurrency.test.js`: 9 tests (Boundary checks: T-1ms, T, T+1ms, T+30s, T+30s+1ms, DB-level expiry guard, version increment, worker safety)
 - `tests/adminAuth.test.js`: 10 tests (Login, case normalization, bad password/email, inactive admin, me, logout, candidate token rejection, expired token)
 - `tests/adminDashboard.test.js`: 3 tests (Zeroed metrics on empty DB, summary calculation accuracy, chart-ready analytics datasets)
-- `tests/adminQuestions.test.js`: 11 tests (CRUD, 10 active limit, deactivation block, atomic swap replacement, invalid options/correctOption, history snapshot immutability, delete blocks)
+- `tests/adminQuestions.test.js`: 14 tests (CRUD, 10 active limit, deactivation block, atomic swap replacement, rollback on error, simultaneous race protection, slot 1-10 boundary enforcement, history snapshot immutability, delete blocks)
 - `tests/adminCandidatesAndExport.test.js`: 8 tests (Zero-N+1 listing, search, isPassed filter, profile, review details, CSV export, Excel export, CWE-1236 sanitization)
 - `tests/adminSettings.test.js`: 8 tests (Get, patch duration/pass %, range validation, reject unknown fields, candidate block, historical attempt snapshot immutability)
