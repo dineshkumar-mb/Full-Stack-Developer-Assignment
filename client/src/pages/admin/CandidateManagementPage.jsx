@@ -161,32 +161,8 @@ export function CandidateManagementPage() {
       setIsExportingExcel(false);
     }
   };
-  setIsExportingExcel(true);
-  try {
-    const { sortBy, sortOrder } = getSortParams();
-    const params = { sortBy, sortOrder };
-    if (search) params.search = search;
-    if (statusFilter) params.assessmentStatus = statusFilter;
-    if (passFilter !== '') params.isPassed = passFilter === 'true';
 
-    const response = await adminService.exportCandidatesExcel(params);
-    const url = window.URL.createObjectURL(
-      new Blob([response.data], { type: 'application/vnd.ms-excel' })
-    );
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `candidates_export_${new Date().toISOString().slice(0, 10)}.xls`);
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-  } catch {
-    setError('Excel export failed. Please try again.');
-  } finally {
-    setIsExportingExcel(false);
-  }
-};
-
-return (
+  return (
   <div className="space-y-6">
     {/* Header & Export Actions */}
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
