@@ -222,6 +222,48 @@ describe('3. Question Model Validation & Active Limit Invariant', () => {
     });
     expect(inactiveQuestion._id).toBeDefined();
   });
+
+  // Test 16: Concurrency guard on active question limit
+  it('should prevent concurrent operations from exceeding 10 active questions via unique activeSlot index', async () => {
+    // Clear and populate 9 active questions
+    await Question.deleteMany({});
+    for (let i = 1; i <= 9; i++) {
+      await Question.create({
+        seedId: `CONC_Q_${i}`,
+        questionText: `Concurrency test question ${i} with valid text length`,
+        options: validOptions,
+        correctOption: 'A',
+        category: 'Quantitative',
+        difficulty: 'Easy',
+        isActive: true,
+      });
+    }
+
+    // Launch 3 concurrent creation attempts
+    const promises = [10, 11, 12].map((num) =>
+      Question.create({
+        seedId: `CONC_Q_${num}`,
+        questionText: `Concurrent creation candidate ${num} with valid length`,
+        options: validOptions,
+        correctOption: 'B',
+        category: 'Logical Reasoning',
+        difficulty: 'Medium',
+        isActive: true,
+      })
+        .then(() => 'created')
+        .catch((err) => 'rejected')
+    );
+
+    const outcomes = await Promise.all(promises);
+    const createdCount = outcomes.filter((o) => o === 'created').length;
+    const rejectedCount = outcomes.filter((o) => o === 'rejected').length;
+
+    expect(createdCount).toBe(1); // exactly one fills the 10th slot
+    expect(rejectedCount).toBe(2); // the other two are rejected
+
+    const finalActiveCount = await Question.countDocuments({ isActive: true });
+    expect(finalActiveCount).toBe(10);
+  });
 });
 
 describe('4. Settings Model Defaults & Singleton Pattern', () => {

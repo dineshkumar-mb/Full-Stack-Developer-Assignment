@@ -89,11 +89,19 @@ const questionSchema = new mongoose.Schema(
       default: true,
       index: true,
     },
+    activeSlot: {
+      type: Number,
+      min: 1,
+      max: 10,
+      default: null,
+    },
   },
   {
     timestamps: true,
   }
 );
+
+questionSchema.index({ activeSlot: 1 }, { unique: true, sparse: true });
 
 // Pre-save validation: Check that the correct option matches one of the provided options
 questionSchema.pre('validate', function (next) {
@@ -106,19 +114,25 @@ questionSchema.pre('validate', function (next) {
   next();
 });
 
-// Guard against exceeding maximum 10 active questions
+// Guard against exceeding maximum 10 active questions via database-safe slot allocation
 questionSchema.pre('save', async function (next) {
   if (this.isActive) {
-    const query = { isActive: true };
-    if (!this.isNew) {
-      query._id = { $ne: this._id };
+    if (!this.activeSlot) {
+      const occupiedSlots = await this.constructor
+        .find({ isActive: true, activeSlot: { $ne: null } })
+        .distinct('activeSlot');
+      const allSlots = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+      const freeSlot = allSlots.find((s) => !occupiedSlots.includes(s));
+
+      if (!freeSlot) {
+        return next(
+          new ApiError(400, 'Maximum 10 active questions permitted in the system. Deactivate another question first.')
+        );
+      }
+      this.activeSlot = freeSlot;
     }
-    const activeCount = await this.constructor.countDocuments(query);
-    if (activeCount >= 10) {
-      return next(
-        new ApiError(400, 'Maximum 10 active questions permitted in the system. Deactivate another question first.')
-      );
-    }
+  } else {
+    this.activeSlot = null;
   }
   next();
 });

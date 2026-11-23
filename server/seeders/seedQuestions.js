@@ -184,10 +184,11 @@ export const SEED_QUESTIONS = [
 
 export const seedQuestions = async () => {
   try {
-    for (const q of SEED_QUESTIONS) {
+    for (let i = 0; i < SEED_QUESTIONS.length; i++) {
+      const q = SEED_QUESTIONS[i];
       await Question.findOneAndUpdate(
         { seedId: q.seedId },
-        { $set: q },
+        { $set: { ...q, activeSlot: i + 1 } },
         { upsert: true, new: true, runValidators: true }
       );
     }
