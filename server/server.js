@@ -1,38 +1,45 @@
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import morgan from 'morgan';
-import dotenv from 'dotenv';
+import app from './app.js';
+import env from './config/environment.js';
+import { connectDB, disconnectDB } from './config/database.js';
 
-dotenv.config();
+let server;
 
-const app = express();
-const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+const startServer = async () => {
+  try {
+    // Connect to database before starting server
+    await connectDB();
 
-// Security and utility middleware
-app.use(helmet());
-app.use(cors({
-  origin: CLIENT_URL,
-  credentials: true
-}));
-app.use(express.json());
-app.use(morgan('dev'));
+    server = app.listen(env.PORT, () => {
+      console.log(`[Server] Aptitude Assessment API running on port ${env.PORT} in ${env.NODE_ENV} mode`);
+      console.log(`[Server] Health check available at: http://localhost:${env.PORT}/api/health`);
+    });
 
-// Basic health check route
-app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    service: 'aptitude-assessment-backend',
-    timestamp: new Date().toISOString()
-  });
-});
+    // Graceful shutdown handlers
+    const handleShutdown = async (signal) => {
+      console.log(`\n[Server] Received ${signal}. Shutting down gracefully...`);
+      if (server) {
+        server.close(async () => {
+          console.log('[Server] HTTP server closed');
+          await disconnectDB();
+          process.exit(0);
+        });
+      } else {
+        await disconnectDB();
+        process.exit(0);
+      }
+    };
 
-// Start listening if run directly
-if (process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, () => {
-    console.log(`[Server] Aptitude Assessment API running on port ${PORT}`);
-  });
+    process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+    process.on('SIGINT', () => handleShutdown('SIGINT'));
+  } catch (error) {
+    console.error(`[Server Fatal] Failed to start application: ${error.message}`);
+    process.exit(1);
+  }
+};
+
+// Start listening if not in test mode
+if (!env.isTest) {
+  startServer();
 }
 
 export default app;
