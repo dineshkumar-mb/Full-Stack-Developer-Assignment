@@ -187,6 +187,39 @@ describe('Phase 3 Audit - Exact Expiry Boundaries & Concurrency', () => {
     vi.useRealTimers();
   });
 
+  it('Prerequisite Check: Database-level expiry guard enforces rejection inside atomic MongoDB update filter even if initial validation checked prior to expiry', async () => {
+    // Set actual DB document to expired
+    await Attempt.findByIdAndUpdate(attemptId, {
+      expiresAt: new Date(Date.now() - 5000),
+    });
+
+    // Mock initial Attempt.findOne so application-level timer check passes as if validated just before expiry
+    const realFindOne = Attempt.findOne.bind(Attempt);
+    const findOneSpy = vi.spyOn(Attempt, 'findOne').mockImplementation(async (query) => {
+      const doc = await realFindOne(query);
+      if (doc && doc._id.toString() === attemptId) {
+        doc.expiresAt = new Date(Date.now() + 60000);
+      }
+      return doc;
+    });
+
+    const mutateRes = await request(app)
+      .patch(`/api/assessment/attempt/questions/${snapshotId1}`)
+      .set('Authorization', `Bearer ${candidateToken}`)
+      .send({ selectedOption: 'C' });
+
+    findOneSpy.mockRestore();
+
+    // The update must be rejected by MongoDB filter { expiresAt: { $gt: new Date() } }
+    expect(mutateRes.status).toBe(400);
+    expect(mutateRes.body.message).toMatch(/expired or completed/);
+
+    // Verify DB was NOT mutated
+    const currentDoc = await Attempt.findById(attemptId);
+    const snap = currentDoc.questionSnapshots.find((s) => s.snapshotId === snapshotId1);
+    expect(snap.candidateAnswer).not.toBe('C');
+  });
+
   // --- 2. OPTIMISTIC CONCURRENCY AUDIT ---
 
   it('should increment version on every accepted answer or review update', async () => {

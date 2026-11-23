@@ -196,12 +196,40 @@ export async function updateCandidateAnswer(candidateId, questionSnapshotId, upd
     if (!refreshed || refreshed.status !== 'in_progress' || Date.now() >= new Date(refreshed.expiresAt).getTime()) {
       throw ApiError.badRequest('Assessment has expired or completed. Changes could not be saved.');
     }
-    // Retry once on version conflict
-    refreshed.questionSnapshots[snapshotIndex].candidateAnswer = updates.selectedOption !== undefined ? updates.selectedOption : refreshed.questionSnapshots[snapshotIndex].candidateAnswer;
-    refreshed.questionSnapshots[snapshotIndex].isMarkedForReview = updates.isMarkedForReview !== undefined ? updates.isMarkedForReview : refreshed.questionSnapshots[snapshotIndex].isMarkedForReview;
-    refreshed.version = (refreshed.version || 0) + 1;
-    await refreshed.save();
-    return refreshed.questionSnapshots[snapshotIndex];
+    // Retry once on version conflict, strictly enforcing database-level expiry and concurrency filter
+    refreshed.questionSnapshots[snapshotIndex].candidateAnswer =
+      updates.selectedOption !== undefined
+        ? updates.selectedOption
+        : refreshed.questionSnapshots[snapshotIndex].candidateAnswer;
+    refreshed.questionSnapshots[snapshotIndex].isMarkedForReview =
+      updates.isMarkedForReview !== undefined
+        ? updates.isMarkedForReview
+        : refreshed.questionSnapshots[snapshotIndex].isMarkedForReview;
+    if (updates.selectedOption !== undefined) {
+      refreshed.questionSnapshots[snapshotIndex].answeredAt = updates.selectedOption ? new Date() : null;
+    }
+
+    const retriedAttempt = await Attempt.findOneAndUpdate(
+      {
+        _id: refreshed._id,
+        status: 'in_progress',
+        version: refreshed.version || 0,
+        expiresAt: { $gt: new Date() },
+      },
+      {
+        $set: {
+          [`questionSnapshots.${snapshotIndex}`]: refreshed.questionSnapshots[snapshotIndex],
+        },
+        $inc: { version: 1 },
+      },
+      { new: true }
+    );
+
+    if (!retriedAttempt) {
+      throw ApiError.badRequest('Assessment has expired or completed. Changes could not be saved.');
+    }
+
+    return retriedAttempt.questionSnapshots[snapshotIndex];
   }
 
   return updatedAttempt.questionSnapshots[snapshotIndex];
