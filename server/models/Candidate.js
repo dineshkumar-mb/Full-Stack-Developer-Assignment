@@ -94,6 +94,7 @@ candidateSchema.virtual('qualification').get(function () {
 });
 
 candidateSchema.index({ fullName: 1 });
+candidateSchema.index({ createdAt: -1 });
 
 export const Candidate = mongoose.model('Candidate', candidateSchema);
 export default Candidate;

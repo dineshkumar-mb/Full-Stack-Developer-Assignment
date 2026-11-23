@@ -7,6 +7,7 @@ import env from './config/environment.js';
 import healthRoutes from './routes/healthRoutes.js';
 import candidateRoutes from './routes/candidateRoutes.js';
 import assessmentRoutes from './routes/assessmentRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
 import notFoundMiddleware from './middleware/notFoundMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
 
@@ -58,6 +59,7 @@ app.use('/api', healthRoutes);
 app.use('/api/candidates', candidateRoutes);
 app.use('/api/candidate', candidateRoutes);
 app.use('/api/assessment', assessmentRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Catch 404 routes
 app.use(notFoundMiddleware);

@@ -62,6 +62,7 @@ export async function initializeAssessment(candidate) {
     correctOption: q.correctOption,
     category: q.category,
     difficulty: q.difficulty,
+    explanation: q.explanation || '',
     candidateAnswer: null,
     isMarkedForReview: false,
     isCorrect: null,

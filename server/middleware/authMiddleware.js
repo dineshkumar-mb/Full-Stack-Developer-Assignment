@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import { Candidate } from '../models/Candidate.js';
+import { Admin } from '../models/Admin.js';
 import env from '../config/environment.js';
 import ApiError from '../utils/ApiError.js';
 
@@ -24,13 +25,27 @@ export const authenticateToken = (req, res, next) => {
   }
 };
 
-export const requireAdmin = (req, res, next) => {
+export const requireAdmin = async (req, res, next) => {
   if (!req.user) {
     return next(ApiError.unauthorized('Authentication required'));
   }
 
   if (req.user.role !== 'admin' && req.user.role !== 'superadmin') {
     return next(ApiError.forbidden('Access denied. Administrator privileges required.'));
+  }
+
+  if (mongoose.isValidObjectId(req.user.id)) {
+    try {
+      const admin = await Admin.findById(req.user.id);
+      if (admin) {
+        if (!admin.isActive) {
+          return next(ApiError.forbidden('Admin account has been deactivated'));
+        }
+        req.admin = admin;
+      }
+    } catch (err) {
+      return next(err);
+    }
   }
 
   next();

@@ -101,7 +101,8 @@ const questionSchema = new mongoose.Schema(
   }
 );
 
-questionSchema.index({ activeSlot: 1 }, { unique: true, sparse: true });
+questionSchema.index({ activeSlot: 1 }, { unique: true, partialFilterExpression: { isActive: true } });
+questionSchema.index({ createdAt: -1 });
 
 // Pre-save validation: Check that the correct option matches one of the provided options
 questionSchema.pre('validate', function (next) {

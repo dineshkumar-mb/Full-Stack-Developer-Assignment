@@ -41,6 +41,10 @@ const questionSnapshotSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    explanation: {
+      type: String,
+      default: '',
+    },
     candidateAnswer: {
       type: String,
       enum: ['A', 'B', 'C', 'D', null],
@@ -153,6 +157,9 @@ const attemptSchema = new mongoose.Schema(
 );
 
 attemptSchema.index({ submittedAt: -1 });
+attemptSchema.index({ 'scoreSummary.netScore': -1 });
+attemptSchema.index({ 'scoreSummary.isPassed': 1 });
+attemptSchema.index({ status: 1, submittedAt: -1 });
 
 export const Attempt = mongoose.model('Attempt', attemptSchema);
 export default Attempt;

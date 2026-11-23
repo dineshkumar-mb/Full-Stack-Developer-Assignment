@@ -15,8 +15,8 @@ This project is built using **Google Antigravity** as the primary AI coding and 
   - Objective: Production-ready Express application (`app.js` & `server.js`), Mongoose schemas (`Admin`, `Settings`, `Question`, `Candidate`, `Attempt`), centralized error handling, JWT & bcrypt authentication foundation, idempotent database seeders (admin, settings, 10 corporate aptitude questions with 4/3/3 category distribution), and comprehensive automated Vitest test suite.
 - **Phase 3: Candidate Assessment Engine & Server-Side Evaluation** (Completed)
   - Objective: Candidate registration & JWT authentication, profile/session recovery, assessment instructions, Fisher-Yates per-candidate question shuffling, immutable question snapshots, safe DTO delivery (masking `correctOption` & explanations), answer & review persistence, server-authoritative timer with 30s submission grace period, background & opportunistic auto-timeout worker, server-side scoring engine (+2, -1, 0, unattempted=0, negative scores allowed, scaledScoreOutOf10, isPassed), and result retrieval.
-- **Phase 4: Admin Authentication, Analytics & Management** (Upcoming)
-  - Objective: JWT + bcrypt auth, role-based middleware, analytics aggregation endpoints, candidate table with search/filtering, detail modal, CSV export, and settings management.
+- **Phase 4: Admin Authentication, Analytics & Management APIs** (Completed)
+  - Objective: Admin login (`POST /api/admin/auth/login`), profile (`GET /api/admin/auth/me`), stateless logout instructions, admin authorization middleware (`requireAdmin` with active-account database verification), dashboard analytics (`/dashboard/summary` and `/dashboard/analytics`), question management CRUD with exact 10 active-question limit and atomic swap replacement, zero-N+1 candidate listing and search/filter/sort aggregation, candidate full assessment review, CSV and Excel (SpreadsheetML) exports with CWE-1236 spreadsheet formula injection sanitization, assessment settings management, and query performance indexing.
 - **Phase 5: Frontend UI/UX Implementation** (Upcoming)
   - Objective: Candidate test interface (palette, timer, review flags, refresh survival, confirmation modal), responsive result view, admin dashboard (Recharts, tables, settings).
 - **Phase 6: End-to-End Verification, Testing & Production Readiness** (Upcoming)
@@ -381,17 +381,130 @@ $$\text{isPassed} = \text{percentage} \ge \text{passPercentage}$$
 
 ---
 
-## 6. Testing Instructions
+## 6. Phase 4 Admin Module Architecture & API Specifications
+
+### Admin Authentication & Authorization Workflow
+- **Login (`POST /api/admin/auth/login`):** Validates email and password, verifies password with `bcrypt.compare()`, checks account active status, records `lastLogin`, and issues a signed JWT (`role: 'admin' | 'superadmin'`). Rate-limited to 20 attempts per 15 minutes.
+- **Admin Verification Middleware (`requireAdmin`):** Verifies the JWT payload and confirms against the database that the administrator account exists and is active. Rejects candidate tokens with `403 Forbidden`.
+- **Stateless Logout (`POST /api/admin/auth/logout`):** Instructs the client application to dispose of the JWT token from storage.
+
+Seeded Administrator Credentials:
+- **Email:** `admin@assessment.com`
+- **Password:** `AdminPassword123!`
+
+---
+
+### Admin API Endpoints
+
+#### 1. Authentication
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `POST` | `/api/admin/auth/login` | Authenticate admin & issue token | Public (Rate-limited) |
+| `GET` | `/api/admin/auth/me` | Current authenticated admin profile | Admin Bearer Token |
+| `POST` | `/api/admin/auth/logout` | Stateless logout acknowledgment | Admin Bearer Token |
+
+#### 2. Dashboard Analytics
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/admin/dashboard/summary` | Key metrics (candidates, completed, pass rate, avg score, highest/lowest) | Admin Bearer Token |
+| `GET` | `/api/admin/dashboard/analytics` | Chart-ready trends (completion, registration, pass/fail, score distribution, category performance) | Admin Bearer Token |
+
+**Summary Metrics Formulation:**
+- `totalCandidates`: Total registered candidates.
+- `completedAssessments`: Count of finalized attempts (`status: 'completed' | 'timed_out'`).
+- `inProgressAssessments`: Count of attempts with `status: 'in_progress'`.
+- `notStartedCandidates`: Candidates without an attempt record.
+- `averageScore`: Average net score across completed attempts.
+- `passRate`: `(passedCandidates / completedAssessments) * 100`.
+- `highestScore` & `lowestScore`: Extremes across completed net scores.
+
+#### 3. Question Bank Management & Active Invariant
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/admin/questions` | List questions with pagination, search, category, difficulty, & status filters | Admin Bearer Token |
+| `GET` | `/api/admin/questions/:id` | Retrieve single question details | Admin Bearer Token |
+| `POST` | `/api/admin/questions` | Create question (max 10 active enforced) | Admin Bearer Token |
+| `PATCH` | `/api/admin/questions/:id` | Update question fields | Admin Bearer Token |
+| `PATCH` | `/api/admin/questions/:id/status` | Activate or deactivate question (supports `replacementQuestionId` swap) | Admin Bearer Token |
+| `DELETE` | `/api/admin/questions/:id` | Delete question (blocks if active and <= 10, or if referenced in history) | Admin Bearer Token |
+
+**Active Question Invariant & Concurrency Guard:**
+- The assessment strictly requires exactly 10 active questions.
+- A MongoDB unique partial index on `{ activeSlot: 1 }, { unique: true, partialFilterExpression: { isActive: true } }` physically prevents concurrent activations from exceeding 10 active questions.
+- **Atomic Replacement / Swap:** When exactly 10 questions are active, an admin cannot deactivate a question into an invalid (< 10) state unless a `replacementQuestionId` is supplied in `PATCH /api/admin/questions/:id/status`, atomically swapping active status and slot assignment.
+- **Auditability Protection:** Questions referenced by candidate attempts (`Attempt.questionSnapshots.questionId`) cannot be deleted, ensuring permanent historical audit integrity.
+
+#### 4. Candidate Management & Assessment Review
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/admin/candidates` | Zero-N+1 paginated candidate list with search, filter, and score sorting | Admin Bearer Token |
+| `GET` | `/api/admin/candidates/:id` | Retrieve safe candidate profile and assessment state | Admin Bearer Token |
+| `GET` | `/api/admin/candidates/:id/assessment` | Full question-by-question review (options, answers, isCorrect, explanation) | Admin Bearer Token |
+
+**Zero-N+1 Aggregation Pipeline:**
+- Candidate listing joins attempts via an efficient MongoDB `$lookup` and `$facet` pipeline, returning candidate details, attempt status, net score, and pass/fail indicators in a single database query.
+- For incomplete/in-progress assessments, the review endpoint returns `status: 'in_progress'` without leaking unfinished evaluation data.
+
+#### 5. CSV and Excel Export (CWE-1236 Formula Injection Protection)
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/admin/candidates/export/csv` | Download candidate report as RFC 4180 CSV | Admin Bearer Token |
+| `GET` | `/api/admin/candidates/export/excel` | Download candidate report as SpreadsheetML XML (.xls) | Admin Bearer Token |
+
+**Spreadsheet Formula Injection Sanitization (CWE-1236):**
+- Candidate-supplied text fields (names, emails, qualifications, cities) that start with formula-triggering characters (`=`, `+`, `-`, `@`) are sanitized by prepending a single quote (`'`), neutralizing executable command risks in Microsoft Excel, Google Sheets, and LibreOffice Calc.
+- Numeric metrics (scores, counts, percentages) are preserved as true numeric types (`<Data ss:Type="Number">` in Excel).
+
+#### 6. Assessment Settings Management
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/admin/settings` | Retrieve current global singleton settings | Admin Bearer Token |
+| `PATCH` | `/api/admin/settings` | Update test duration (5–180m), pass % (0–100), marks weights | Admin Bearer Token |
+
+**Historical Attempt Immutability:**
+- Settings updates mutate the singleton `Settings` document and record `updatedBy: adminId`.
+- Existing attempts retain their original immutable `settingsSnapshot` captured at initialization; past durations and pass marks are never altered retroactively.
+
+---
+
+## 7. Database Performance & Indexing
+
+| Collection | Index | Purpose |
+|---|---|---|
+| `admins` | `{ email: 1 }` (unique) | Fast admin lookup and uniqueness |
+| `candidates` | `{ email: 1 }` (unique) | Unique candidate email enforcement |
+| `candidates` | `{ fullName: 1 }` | Fast candidate name search |
+| `candidates` | `{ createdAt: -1 }` | Candidate listing sort by registration date |
+| `attempts` | `{ candidateId: 1 }` (unique) | One attempt per candidate invariant |
+| `attempts` | `{ candidateEmail: 1 }` (unique) | Secondary candidate attempt guard |
+| `attempts` | `{ status: 1, submittedAt: -1 }` | Fast dashboard queries and completion filtering |
+| `attempts` | `{ 'scoreSummary.netScore': -1 }` | Candidate leaderboard & score sorting |
+| `attempts` | `{ 'scoreSummary.isPassed': 1 }` | Pass/fail candidate filtering & analytics |
+| `questions` | `{ activeSlot: 1 }` (unique, partial: `isActive: true`) | Concurrency guard ensuring strictly $\le 10$ active questions |
+| `questions` | `{ category: 1 }`, `{ difficulty: 1 }`, `{ isActive: 1 }` | Question bank filtering |
+| `questions` | `{ createdAt: -1 }` | Sorted question list pagination |
+| `settings` | `{ singletonKey: 1 }` (unique) | Global singleton settings guard |
+
+---
+
+## 8. Testing Instructions
 
 ### Run the Full Test Suite
 ```bash
 cd server
 npm run test
 ```
-**Current Test Results (52 tests across 6 files):**
+
+**Test Suite Coverage (101 tests across 12 files):**
 - `tests/models.test.js`: 15 tests (Admin, Candidate, Question, Settings, Attempt validations & activeSlot concurrency)
 - `tests/authAndMiddleware.test.js`: 5 tests (Bcrypt, JWT verification, RBAC, error handlers)
 - `tests/healthAndSeed.test.js`: 3 tests (Healthcheck, seeder idempotency, 4/3/3 question category distribution)
 - `tests/candidateRegistrationAndAuth.test.js`: 10 tests (Registration, validation errors, duplicate email rejection, session restore)
 - `tests/assessmentEngine.test.js`: 11 tests (Start, shuffle, DTO shielding, answer save, clear, timer expiry, 30s grace period, background worker)
 - `tests/scoringEngine.test.js`: 8 tests (All scoring edge cases: 100%, 0%, negative marks, threshold pass/fail, server timestamps)
+- `tests/timerBoundariesAndConcurrency.test.js`: 9 tests (Boundary checks: T-1ms, T, T+1ms, T+30s, T+30s+1ms, DB-level expiry guard, version increment, worker safety)
+- `tests/adminAuth.test.js`: 10 tests (Login, case normalization, bad password/email, inactive admin, me, logout, candidate token rejection, expired token)
+- `tests/adminDashboard.test.js`: 3 tests (Zeroed metrics on empty DB, summary calculation accuracy, chart-ready analytics datasets)
+- `tests/adminQuestions.test.js`: 11 tests (CRUD, 10 active limit, deactivation block, atomic swap replacement, invalid options/correctOption, history snapshot immutability, delete blocks)
+- `tests/adminCandidatesAndExport.test.js`: 8 tests (Zero-N+1 listing, search, isPassed filter, profile, review details, CSV export, Excel export, CWE-1236 sanitization)
+- `tests/adminSettings.test.js`: 8 tests (Get, patch duration/pass %, range validation, reject unknown fields, candidate block, historical attempt snapshot immutability)
