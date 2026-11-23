@@ -1,0 +1,32 @@
+{
+  "name": "full-stack-aptitude-assessment-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-Stack Aptitude Assessment Dashboard (MERN Stack)",
+  "scripts": {
+    "install:all": "npm install --prefix server && npm install --prefix client",
+    "seed": "npm run seed --prefix server",
+    "seed:admin": "npm run seed:admin --prefix server",
+    "seed:questions": "npm run seed:questions --prefix server",
+    "seed:settings": "npm run seed:settings --prefix server",
+    "test:server": "npm run test --prefix server",
+    "test:client": "npm run test --prefix client",
+    "test": "npm run test:server && npm run test:client",
+    "build:client": "npm run build --prefix client",
+    "build": "npm run build:client",
+    "start:server": "npm start --prefix server",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client"
+  },
+  "keywords": [
+    "react",
+    "nodejs",
+    "express",
+    "mongodb",
+    "aptitude-test",
+    "assessment-platform",
+    "mern"
+  ],
+  "author": "Dinesh Kumar M B",
+  "license": "MIT"
+}
